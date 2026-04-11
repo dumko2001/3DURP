@@ -1,0 +1,44 @@
+%YAML 1.1
+%TAG !u! tag:yousandi.cn,2023:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f950cca1247b61d4c89033cce60869f0, type: 3}
+  m_Name: AdSettings
+  m_EditorClassIdentifier: 
+  enableTrackingConsent: 0
+  bannerAdsEnabled: 0
+  RewardedAdsEnabled: 0
+  InterstitialAdsEnabled: 0
+  SplashAdsEnabled: 0
+  NativeAdsEnabled: 0
+  RollAdsEnabled: 0
+  BannerAdId: 
+  bannerSizeIndex: 0
+  bannerSizes:
+  - 360x57
+  - 360x144
+  refreshTime: 30000
+  RewardAdId: 
+  InterstitialAdId: 
+  SplashAdId: 
+  SplashText: 
+  SplashSubText: 
+  SplashImage: {fileID: 0}
+  SplashImgPath: 
+  NativeLargeImgAdId: 
+  NativeSmallImgAdId: 
+  NativeThreeImgAdId: 
+  NativeVideoAdId: 
+  RollAdId: 
+  RollCountDownText: 
+  RollVideo: {fileID: 32900000, guid: 41e3d662dd974ab48be04e0b21f15b2b, type: 3}
+  VideoFileName: example_video.mp4
+  RollPreviewImage: {fileID: 2800000, guid: f8b7d70c48db5404299d9b4320ca0b89, type: 3}
+  ImageFileName: example_preview_image.png
