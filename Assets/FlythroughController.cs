@@ -1,6 +1,7 @@
 using System.Collections;
 using UnityEngine;
 using UnityEngine.Playables;
+using UnityEngine.Rendering;
 using UnityEngine.UI;
 
 /// <summary>
@@ -40,51 +41,64 @@ public class FlythroughController : MonoBehaviour
         (15f, 0.240f),   // finale     —  3.6 s content  (total = 35 s)
     };
 
-    // ── FPS overlay config ───────────────────────────────────────────────────
-    // Measured over a rolling 0.5 s window — short enough to catch transients,
-    // long enough not to flicker unreadably. Shown top-left, small but legible.
-    private const float FPS_SAMPLE_WINDOW = 0.5f;   // seconds between FPS recalculations
-    private const int   OVERLAY_FONT_SIZE = 28;     // ~14 pt equivalent on 1080p
+    // ── Timing ───────────────────────────────────────────────────────────────
+    private const float TOTAL_REAL_DURATION = 60f;   // SOW: exactly 60 s wall-clock
+    private const float FPS_SAMPLE_WINDOW   = 0.5f;  // rolling FPS window
+    private const int   OVERLAY_FONT_SIZE   = 26;
 
     // ── Runtime state ────────────────────────────────────────────────────────
     private PlayableDirector _director;
-    private string           _configLabel = "";      // e.g. "60fps | 2x2 VRS"
+    private string           _configLabel      = "";
+    private int              _vrsRendererCount = 0;   // how many scene renderers got VRS
+    private bool             _running          = false;
 
     // FPS tracking
-    private float _fpsAccum;        // sum of (1/deltaTime) within current window
-    private int   _fpsFrameCount;   // frames counted in current window
-    private float _fpsTimer;        // time since last FPS recalculation
-    private float _measuredFPS;     // last computed average
-
-    // UI refs
-    private Text  _overlayText;
+    private float _fpsAccum;
+    private int   _fpsFrameCount;
+    private float _fpsTimer;
+    private float _measuredFPS;
     private float _elapsedRealTime;
+
+    // UI — two lines
+    private Text  _line1;   // measured fps | elapsed time | config
+    private Text  _line2;   // VRS hardware caps + active mode (read live from engine)
 
     // ── Public API ───────────────────────────────────────────────────────────
 
     /// <summary>
     /// Call immediately after PlayerManager.EnableFlythrough().
-    /// configLabel example: "60fps | 2x2 VRS"
+    /// vrsRendererCount: number of scene renderers that received a VRS rate (0 = VRS Off).
     /// </summary>
-    public void StartFlythrough(PlayableDirector director, string configLabel)
+    public void StartFlythrough(PlayableDirector director, string configLabel, int vrsRendererCount)
     {
-        _director    = director;
-        _configLabel = configLabel;
+        _director          = director;
+        _configLabel       = configLabel;
+        _vrsRendererCount  = vrsRendererCount;
+        _running           = true;
+
+        // Set speed=0 right now — Play() has already built the graph synchronously
+        // before this method is called, so root is accessible immediately.
+        // Without this, the timeline advances at speed 1.0 for the first frame.
+        if (_director.playableGraph.IsValid())
+            _director.playableGraph.GetRootPlayable(0).SetSpeed(0.0);
+        else
+            Debug.LogWarning("[Flythrough] Graph not valid at start — first frame may use speed 1.");
 
         BuildOverlay();
         StartCoroutine(DriveSpeed());
+        StartCoroutine(HardStop());
     }
 
     // ── MonoBehaviour ────────────────────────────────────────────────────────
 
     void Update()
     {
-        if (_overlayText == null) return;
+        if (_line1 == null || !_running) return;
 
-        // Accumulate for rolling FPS average.
-        _fpsAccum      += Time.unscaledDeltaTime > 0 ? 1f / Time.unscaledDeltaTime : 0f;
+        // Rolling FPS average.
+        _fpsAccum        += Time.unscaledDeltaTime > 0f ? 1f / Time.unscaledDeltaTime : 0f;
         _fpsFrameCount++;
-        _fpsTimer      += Time.unscaledDeltaTime;
+        _fpsTimer        += Time.unscaledDeltaTime;
         _elapsedRealTime += Time.unscaledDeltaTime;
 
         if (_fpsTimer >= FPS_SAMPLE_WINDOW)
@@ -95,83 +109,124 @@ public class FlythroughController : MonoBehaviour
             _fpsTimer      = 0f;
         }
 
-        // Format: "60.0 fps  |  t=12.3s  |  60fps | 2x2 VRS"
-        _overlayText.text =
-            $"{_measuredFPS:F1} fps  |  t={_elapsedRealTime:F1}s  |  {_configLabel}";
+        // Line 1: performance numbers + selected config.
+        _line1.text = $"{_measuredFPS:F1} fps  |  t={_elapsedRealTime:F1}s  |  {_configLabel}";
+
+        // Line 2: ACTUAL hardware VRS state, read live from the engine every frame.
+        // This is the real answer to "did VRS happen?":
+        //   caps=None  → hardware does not support VRS on this device (editor on Mac will show this)
+        //   caps=Pipeline/Primitive → hardware can do VRS
+        //   mode=Custom + renderers>0 → VRS rates were applied and URP will forward them
+        // NOTE: confirming at the GPU driver level requires a hardware profiler
+        //        (Huawei DevEco Profiler / Mali Graphics Debugger).
+        var    caps    = SystemInfo.shadingRateTypeCaps;
+        var    mode    = GraphicsSettings.variableRateShadingMode;
+        string capStr  = (caps == ShadingRateTypeCaps.None)
+                         ? "None — NOT supported on this GPU"
+                         : caps.ToString();
+        string modeStr = (mode == VariableRateShadingMode.Off)
+                         ? "Off"
+                         : $"{mode} ({_vrsRendererCount} renderers)";
+        _line2.text = $"VRS hw: {capStr}  |  active: {modeStr}";
     }
 
     // ── Speed schedule coroutine ─────────────────────────────────────────────
 
     private IEnumerator DriveSpeed()
     {
-        // One frame delay — ensures director.Play() has initialised the PlayableGraph.
-        yield return null;
-
-        if (!_director.playableGraph.IsValid())
-        {
-            Debug.LogError("[Flythrough] PlayableGraph invalid — speed control aborted.");
-            yield break;
-        }
-
-        // The root playable (index 0) is the top-level TimelinePlayable.
-        var root = _director.playableGraph.GetRootPlayable(0);
-
+        // No yield return null needed here — speed was already set to 0 in StartFlythrough().
+        // Each phase: apply speed, wait exactly realDur wall-clock seconds, repeat.
         int phaseIndex = 0;
         foreach (var (realDur, speed) in Phases)
         {
-            root.SetSpeed(speed);
-            Debug.Log($"[Flythrough] Phase {phaseIndex}: speed={speed:F3}x  duration={realDur}s");
+            // Re-validate each phase. The graph is disposed if anything calls
+            // FlythroughDirector.gameObject.SetActive(false) externally.
+            if (!_director.playableGraph.IsValid())
+            {
+                Debug.LogWarning($"[Flythrough] Graph disposed at phase {phaseIndex} — aborting.");
+                yield break;
+            }
+
+            _director.playableGraph.GetRootPlayable(0).SetSpeed(speed);
+            Debug.Log($"[Flythrough] Phase {phaseIndex}: speed={speed:F3}x  realDur={realDur}s");
             phaseIndex++;
 
-            // WaitForSecondsRealtime is unaffected by Time.timeScale and frame-rate
-            // caps, so each phase occupies exactly the intended wall-clock seconds.
             yield return new WaitForSecondsRealtime(realDur);
         }
 
-        // All content consumed. Restore speed; director stops via DirectorWrapMode.None.
-        root.SetSpeed(1.0);
-        Debug.Log("[Flythrough] Speed schedule complete.");
+        // Content exhausted — director stops automatically via DirectorWrapMode.None.
+        // Restore speed in case anything re-uses this director later.
+        if (_director.playableGraph.IsValid())
+            _director.playableGraph.GetRootPlayable(0).SetSpeed(1.0);
+
+        Debug.Log("[Flythrough] Speed schedule complete — 60 s consumed.");
+    }
+
+    // Safety net: fires at 60.5 s. If the speed schedule ran correctly the director
+    // is already stopped. If something kept it alive, stop it now and mark run done.
+    private IEnumerator HardStop()
+    {
+        yield return new WaitForSecondsRealtime(TOTAL_REAL_DURATION + 0.5f);
+
+        if (_director != null && _director.state == PlayState.Playing)
+        {
+            _director.Stop();
+            Debug.LogWarning("[Flythrough] Hard-stop triggered — director was still playing at 60.5 s.");
+        }
+
+        _running = false;
+        Debug.Log("[Flythrough] Run complete. Check 'VRS hw' line in overlay to verify hardware support.");
     }
 
     // ── FPS overlay construction ─────────────────────────────────────────────
 
     private void BuildOverlay()
     {
-        // Dedicated canvas — ScreenSpaceOverlay so it renders above everything.
         var canvasGO = new GameObject("FPS_Overlay");
         var canvas   = canvasGO.AddComponent<Canvas>();
         canvas.renderMode   = RenderMode.ScreenSpaceOverlay;
-        canvas.sortingOrder = 1000;   // always on top (> StartCanvas sortingOrder 999)
-        var scaler              = canvasGO.AddComponent<CanvasScaler>();
-        scaler.uiScaleMode      = CanvasScaler.ScaleMode.ScaleWithScreenSize;
+        canvas.sortingOrder = 1000;  // above StartCanvas (999)
+        var scaler = canvasGO.AddComponent<CanvasScaler>();
+        scaler.uiScaleMode         = CanvasScaler.ScaleMode.ScaleWithScreenSize;
         scaler.referenceResolution = new Vector2(1920, 1080);
-        canvasGO.AddComponent<UnityEngine.UI.GraphicRaycaster>();
+        canvasGO.AddComponent<GraphicRaycaster>();
 
-        // Semi-transparent dark pill so text is readable over any background.
+        // Dark pill — tall enough for two lines.
         var bgGO  = new GameObject("BG");
         bgGO.transform.SetParent(canvasGO.transform, false);
         var bgImg = bgGO.AddComponent<Image>();
-        bgImg.color = new Color(0f, 0f, 0f, 0.55f);
+        bgImg.color = new Color(0f, 0f, 0f, 0.62f);
         var bgRT  = bgGO.GetComponent<RectTransform>();
-        bgRT.anchorMin = new Vector2(0f, 1f);   // top-left anchor
-        bgRT.anchorMax = new Vector2(0f, 1f);
-        bgRT.pivot     = new Vector2(0f, 1f);
-        bgRT.anchoredPosition = new Vector2(12f, -12f);  // 12 px inset from top-left
-        bgRT.sizeDelta        = new Vector2(560f, 42f);
+        bgRT.anchorMin        = new Vector2(0f, 1f);
+        bgRT.anchorMax        = new Vector2(0f, 1f);
+        bgRT.pivot            = new Vector2(0f, 1f);
+        bgRT.anchoredPosition = new Vector2(12f, -12f);
+        bgRT.sizeDelta        = new Vector2(780f, 72f);  // wider + taller for two rows
 
-        // Text label inside the pill.
-        var txtGO = new GameObject("FPSText");
-        txtGO.transform.SetParent(bgGO.transform, false);
-        _overlayText = txtGO.AddComponent<Text>();
-        _overlayText.font      = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
-        _overlayText.fontSize  = OVERLAY_FONT_SIZE;
-        _overlayText.color     = Color.white;
-        _overlayText.alignment = TextAnchor.MiddleLeft;
-        _overlayText.text      = "-- fps";
-        var txtRT = txtGO.GetComponent<RectTransform>();
-        txtRT.anchorMin = Vector2.zero;
-        txtRT.anchorMax = Vector2.one;
-        txtRT.offsetMin = new Vector2(10f, 0f);
-        txtRT.offsetMax = Vector2.zero;
+        // Line 1 — white: measured fps, elapsed time, config.
+        _line1 = MakeTextRow(bgGO.transform, new Vector2(10f, 0f), new Vector2(-10f, -36f), Color.white);
+
+        // Line 2 — amber: VRS hardware truth (read live from engine, not what we asked for).
+        _line2 = MakeTextRow(bgGO.transform, new Vector2(10f, -36f), new Vector2(-10f, 0f),
+                             new Color(1f, 0.85f, 0.35f, 1f));
+        _line2.fontSize = OVERLAY_FONT_SIZE - 2;
+    }
+
+    private Text MakeTextRow(Transform parent, Vector2 offsetMin, Vector2 offsetMax, Color color)
+    {
+        var go = new GameObject("Row");
+        go.transform.SetParent(parent, false);
+        var t  = go.AddComponent<Text>();
+        t.font      = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        t.fontSize  = OVERLAY_FONT_SIZE;
+        t.color     = color;
+        t.alignment = TextAnchor.UpperLeft;
+        t.text      = "...";
+        var rt = go.GetComponent<RectTransform>();
+        rt.anchorMin = Vector2.zero;
+        rt.anchorMax = Vector2.one;
+        rt.offsetMin = offsetMin;
+        rt.offsetMax = offsetMax;
+        return t;
     }
 }

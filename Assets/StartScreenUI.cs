@@ -19,6 +19,7 @@ public class StartScreenUI : MonoBehaviour
     // Buttons arrays so we can highlight selected one
     private Image[] fpsBtnImages;
     private Image[] vrsBtnImages;
+    private int     vrsRendererCount = 0;  // set by ApplyVRS, passed to overlay
 
     // ── Config options ───────────────────────────────────────────────
     private readonly int[]    fpsOptions  = { 120, 60, 40, 30 };
@@ -225,19 +226,27 @@ public class StartScreenUI : MonoBehaviour
         QualitySettings.vSyncCount  = 0;
         Application.targetFrameRate = selectedFPS;
 
-        // Apply VRS — plug Huawei private API in here
-        ApplyVRS(selectedVRS);
+        // Apply VRS — captures renderer count for the overlay
+        vrsRendererCount = ApplyVRS(selectedVRS);
 
         // Hide UI
         canvasGO.SetActive(false);
 
+        // Lock cursor so accidental mouse movement cannot trigger PlayerManager's
+        // NotifyPlayerMoved() → EnableFirstPersonController() → director.SetActive(false)
+        // which would dispose the PlayableGraph mid-run.
+        Cursor.lockState = CursorLockMode.Locked;
+        Cursor.visible   = false;
+
         // Trigger the flythrough via PlayerManager — this handles activating the
         // director GameObject, binding the CinemachineBrain to the Timeline track,
         // and calling Play(). Without the binding step the camera never moves.
+        // IMPORTANT: keep PlayerManager DISABLED after the call. Re-enabling it
+        // would restart its Update() loop which watches for mouse/touch and calls
+        // EnableFirstPersonController(), stopping the flythrough.
         if (playerManager != null)
         {
-            playerManager.enabled = true;   // re-enable so Start() can run if it hasn't yet
-
+            // playerManager.enabled stays FALSE — public methods are still callable.
             var dir = playerManager.FlythroughDirector;
             dir.extrapolationMode = DirectorWrapMode.None;  // stop cleanly at end
             dir.time = 0;
@@ -249,7 +258,7 @@ public class StartScreenUI : MonoBehaviour
             var controller = gameObject.GetComponent<FlythroughController>()
                              ?? gameObject.AddComponent<FlythroughController>();
             string configLabel = $"{selectedFPS}fps | {vrsLabels[selectedVRS]}";
-            controller.StartFlythrough(dir, configLabel);
+            controller.StartFlythrough(dir, configLabel, vrsRendererCount);
         }
         else
         {
@@ -259,15 +268,9 @@ public class StartScreenUI : MonoBehaviour
         Debug.Log($"[START] {selectedFPS}fps | VRS={vrsLabels[selectedVRS]}");
     }
 
-    // ── VRS — hardware Variable Rate Shading via Tuanjie/Unity 2022.3 API ──
-    // GraphicsSettings.variableRateShadingMode is the global toggle.
-    // Renderer.shadingRate sets the per-object fragment size; URP 14 forwards
-    // this into the Vulkan VK_KHR_fragment_shading_rate pipeline stage.
-    //
-    // Only 3D scene renderers receive the rate — UI Canvas renderers are
-    // excluded because shading-rate has no meaning on 2D screen-space elements
-    // and can produce undefined behaviour on some drivers.
-    void ApplyVRS(int mode)
+    // Returns the number of scene renderers that received the VRS rate.
+    // 0 = VRS Off or no renderers modified.
+    int ApplyVRS(int mode)
     {
         // Always log hardware caps so it appears in adb logcat during testing.
         ShadingRateTypeCaps caps = SystemInfo.shadingRateTypeCaps;
@@ -281,14 +284,14 @@ public class StartScreenUI : MonoBehaviour
                 if (IsSceneRenderer(r))
                     r.shadingRate = ShadingRateFragmentSize.Size1x1;
             Debug.Log("[VRS] Disabled — full 1×1 quality restored.");
-            return;
+            return 0;
         }
 
         // Require at least Pipeline or Primitive hardware support.
         if (caps == ShadingRateTypeCaps.None)
         {
             Debug.LogWarning("[VRS] Hardware does not support VRS on this device — skipped.");
-            return;
+            return 0;
         }
 
         // Map button index to fragment size.
@@ -314,6 +317,7 @@ public class StartScreenUI : MonoBehaviour
         }
 
         Debug.Log($"[VRS] {vrsLabels[mode]} ({fragmentSize}) → {count} scene renderers. Caps={caps}");
+        return count;
     }
 
     // Returns true for renderers that should receive a VRS rate.
