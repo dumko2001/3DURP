@@ -175,7 +175,22 @@ public class FlythroughController : MonoBehaviour
         }
 
         _running = false;
-        Debug.Log("[Flythrough] Run complete. Check 'VRS hw' line in overlay to verify hardware support.");
+
+        // Show run-complete state on overlay so it's clear the benchmark finished.
+        if (_line1 != null) _line1.text = "RUN COMPLETE — check VRS hw line below";
+        if (_line2 != null)
+        {
+            var caps = SystemInfo.shadingRateTypeCaps;
+            var mode = GraphicsSettings.variableRateShadingMode;
+            _line2.text = $"VRS hw: {caps}  |  final mode: {mode} ({_vrsRendererCount} renderers)";
+        }
+
+        // Release cursor — locks in Editor during flythrough to prevent mouse breaking the run.
+        // Safe to unlock now; on HarmonyOS device this is a no-op (no mouse).
+        Cursor.lockState = CursorLockMode.None;
+        Cursor.visible   = true;
+
+        Debug.Log("[Flythrough] Run complete. Check 'VRS hw' line in overlay for hardware verification.");
     }
 
     // ── FPS overlay construction ─────────────────────────────────────────────
@@ -191,23 +206,27 @@ public class FlythroughController : MonoBehaviour
         scaler.referenceResolution = new Vector2(1920, 1080);
         canvasGO.AddComponent<GraphicRaycaster>();
 
-        // Dark pill — tall enough for two lines.
+        // Dark pill — tall enough for two lines (two 32px rows + 8px padding).
         var bgGO  = new GameObject("BG");
         bgGO.transform.SetParent(canvasGO.transform, false);
         var bgImg = bgGO.AddComponent<Image>();
         bgImg.color = new Color(0f, 0f, 0f, 0.62f);
         var bgRT  = bgGO.GetComponent<RectTransform>();
-        bgRT.anchorMin        = new Vector2(0f, 1f);
+        bgRT.anchorMin        = new Vector2(0f, 1f);  // pin to top-left of screen
         bgRT.anchorMax        = new Vector2(0f, 1f);
         bgRT.pivot            = new Vector2(0f, 1f);
         bgRT.anchoredPosition = new Vector2(12f, -12f);
-        bgRT.sizeDelta        = new Vector2(780f, 72f);  // wider + taller for two rows
+        bgRT.sizeDelta        = new Vector2(820f, 72f);
 
-        // Line 1 — white: measured fps, elapsed time, config.
-        _line1 = MakeTextRow(bgGO.transform, new Vector2(10f, 0f), new Vector2(-10f, -36f), Color.white);
+        // Line 1 (top row) — white: measured fps, elapsed time, config.
+        // offsetMin.y=36 → bottom of row is at the middle of the BG (36px from bottom)
+        // offsetMax.y=0  → top of row touches BG top
+        _line1 = MakeTextRow(bgGO.transform, new Vector2(10f, 36f), new Vector2(-10f, 0f), Color.white);
 
-        // Line 2 — amber: VRS hardware truth (read live from engine, not what we asked for).
-        _line2 = MakeTextRow(bgGO.transform, new Vector2(10f, -36f), new Vector2(-10f, 0f),
+        // Line 2 (bottom row) — amber: live VRS hardware state from engine.
+        // offsetMin.y=4  → 4px padding above BG bottom
+        // offsetMax.y=-36 → top of row is at the BG midpoint (36px below BG top)
+        _line2 = MakeTextRow(bgGO.transform, new Vector2(10f, 4f), new Vector2(-10f, -36f),
                              new Color(1f, 0.85f, 0.35f, 1f));
         _line2.fontSize = OVERLAY_FONT_SIZE - 2;
     }

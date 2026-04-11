@@ -9,12 +9,13 @@ Runs a fixed 60-second cinematic camera flythrough under selectable refresh-rate
 
 ## Prerequisites
 
-| Requirement | Version |
+| Requirement | Version / Note |
 |---|---|
-| **Tuanjie Editor** (Huawei Unity fork) | **1.8.5** (2022.3.62t7) |
-| Android SDK / NDK | installed via Unity Hub |
-| Target device | Huawei — Android API ≥ 23 |
-| USB debugging | enabled on device |
+| **Tuanjie Editor** (Huawei Unity fork) | **1.8.5** (2022.3.62t7) — install via Tuanjie Hub |
+| **DevEco Studio** | 4.0+ — required to sign and deploy the HAP |
+| **OpenHarmony SDK** | installed via DevEco Studio SDK Manager |
+| Target device | Huawei running HarmonyOS 4+ with USB debugging enabled |
+| USB debugging | enabled in Developer Options on device |
 
 ---
 
@@ -49,17 +50,28 @@ The benchmark runs in the Oasis scene. `StartScreenUI` (on the Manager GO) handl
 
 ---
 
-## Build & deploy
+## Build & deploy (OpenHarmony / HarmonyOS)
 
-### Android build settings
-
-1. **File → Build Settings** → switch platform to **Android**.
+### Step 1 — Export from Tuanjie
+1. **File → Build Settings** → select **OpenHarmony** as platform (switch if needed).
 2. Player Settings:
-   - *Minimum API Level*: 23.
+   - *Minimum API Level*: API 10 (HarmonyOS 4.0).
    - *Scripting Backend*: IL2CPP.
    - *Target Architectures*: ARM64.
-3. Connect the Huawei device via USB.
-4. Click **Build and Run**.
+3. Click **Export Project** — Tuanjie generates an hvigor project folder (not a HAP directly).
+
+### Step 2 — Build HAP in DevEco Studio
+1. Open DevEco Studio → **Open** the exported hvigor project folder.
+2. Let it sync Gradle/hvigor dependencies.
+3. Connect Huawei device via USB (USB debugging on).
+4. **Build → Build Hap(s)/App(s) → Build Debug Hap(s)** — or press the Run button to build + deploy in one step.
+5. The `.hap` file is output to `build/default/outputs/default/`.
+
+### Step 3 — Manual install (optional, if sharing HAP directly)
+```bash
+hdc install path/to/app.hap
+hdc shell aa start -a EntryAbility -b com.unity.template.urpsample
+```
 
 ---
 

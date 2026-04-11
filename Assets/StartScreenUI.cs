@@ -157,7 +157,7 @@ public class StartScreenUI : MonoBehaviour
                                   labelCopy,
                                   new Vector2(-270 + i * 180, -20),
                                   new Vector2(160, 48),
-                                  () => OnVRSSelected(modeCopy, modeCopy));
+                                  () => OnVRSSelected(modeCopy));
             vrsBtnImages[i] = btn.GetComponent<Image>();
         }
 
@@ -193,11 +193,11 @@ public class StartScreenUI : MonoBehaviour
         Debug.Log($"FPS selected: {fps}");
     }
 
-    void OnVRSSelected(int mode, int idx)
+    void OnVRSSelected(int mode)
     {
         selectedVRS = mode;
         for (int i = 0; i < vrsBtnImages.Length; i++)
-            vrsBtnImages[i].color = (i == idx) ? COL_SELECTED : COL_IDLE;
+            vrsBtnImages[i].color = (i == mode) ? COL_SELECTED : COL_IDLE;
         UpdateStatus();
         Debug.Log($"VRS selected: {vrsLabels[mode]}");
     }
@@ -248,9 +248,31 @@ public class StartScreenUI : MonoBehaviour
         {
             // playerManager.enabled stays FALSE — public methods are still callable.
             var dir = playerManager.FlythroughDirector;
+            if (dir == null)
+            {
+                Debug.LogError("[START] FlythroughDirector is not assigned on PlayerManager. " +
+                               "Open the Manager GameObject in Inspector and assign the Cinematic Timeline director.");
+                return;
+            }
             dir.extrapolationMode = DirectorWrapMode.None;  // stop cleanly at end
             dir.time = 0;
             playerManager.EnableFlythrough();
+
+            // CRITICAL: clear m_InFlythrough via reflection immediately after EnableFlythrough().
+            // Why: PlayerManager.Start() was skipped (component disabled before it ran), so
+            // m_VirtualCamera is null. The InputSystem '<pointer>/press' action in
+            // StarterAssetsInputs fires on ANY screen tap or mouse click, which calls
+            // CameraManager.NotifyPlayerMoved(). That method calls EnableFirstPersonController()
+            // only when m_InFlythrough==true, and that crashes on m_VirtualCamera being null.
+            // Setting it false makes NotifyPlayerMoved() a safe no-op for the entire run.
+            // The director keeps playing; FlythroughController manages it directly.
+            var inFlyField = typeof(PlayerManager).GetField(
+                "m_InFlythrough",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            if (inFlyField != null)
+                inFlyField.SetValue(playerManager, false);
+            else
+                Debug.LogWarning("[START] Reflection: m_InFlythrough not found — accidental tap may break flythrough.");
 
             // Start the speed-schedule controller that shapes a 35 s timeline into
             // exactly 60 s: 10 s static + 50 s motion at varying speeds.
