@@ -280,7 +280,7 @@ public class StartScreenUI : MonoBehaviour
             var controller = gameObject.GetComponent<FlythroughController>()
                              ?? gameObject.AddComponent<FlythroughController>();
             string configLabel = $"{selectedFPS}fps | {vrsLabels[selectedVRS]}";
-            controller.StartFlythrough(dir, configLabel, vrsRendererCount);
+            controller.StartFlythrough(dir, configLabel, vrsRendererCount, selectedFPS);
         }
         else
         {

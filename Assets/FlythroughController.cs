@@ -51,7 +51,8 @@ public class FlythroughController : MonoBehaviour
     // ── Runtime state ────────────────────────────────────────────────────────
     private PlayableDirector _director;
     private string           _configLabel      = "";
-    private int              _vrsRendererCount = 0;   // how many scene renderers got VRS
+    private int              _vrsRendererCount = 0;
+    private int              _targetFps        = 60;  // used for throttle detection
     private bool             _running          = false;
 
     // FPS tracking
@@ -68,7 +69,7 @@ public class FlythroughController : MonoBehaviour
     // CSV data logger
     private StringBuilder _csv;
     private float         _csvTimer;
-    private const float   CSV_INTERVAL = 0.5f;  // one row every 0.5 s = 120 rows over 60 s
+    private const float   CSV_INTERVAL = 0.1f;  // 100 ms rows = 600 rows over 60 s
 
     // UI — two lines
     private Text  _line1;   // measured fps | elapsed time | config
@@ -79,21 +80,23 @@ public class FlythroughController : MonoBehaviour
     /// <summary>
     /// Call immediately after PlayerManager.EnableFlythrough().
     /// vrsRendererCount: number of scene renderers that received a VRS rate (0 = VRS Off).
+    /// targetFps: the Application.targetFrameRate that was applied — used for throttle detection.
     /// </summary>
-    public void StartFlythrough(PlayableDirector director, string configLabel, int vrsRendererCount)
+    public void StartFlythrough(PlayableDirector director, string configLabel, int vrsRendererCount, int targetFps = 60)
     {
         _director          = director;
         _configLabel       = configLabel;
         _vrsRendererCount  = vrsRendererCount;
+        _targetFps         = targetFps;
         _running           = true;
 
-        // Initialise CSV — header row includes device info for context.
+        // Initialise CSV.
         _csv = new StringBuilder();
         _csv.AppendLine($"# Benchmark run: {System.DateTime.Now:yyyy-MM-dd HH:mm:ss}");
         _csv.AppendLine($"# Config: {configLabel}");
         _csv.AppendLine($"# Device: {SystemInfo.deviceModel}  GPU: {SystemInfo.graphicsDeviceName}");
         _csv.AppendLine($"# VRS caps: {SystemInfo.shadingRateTypeCaps}  Renderers modified: {vrsRendererCount}");
-        _csv.AppendLine("time_s,fps,phase,speed,vrs_mode,vrs_renderers");
+        _csv.AppendLine("time_s,fps,phase,speed,vrs_mode,vrs_renderers,throttle");
 
         // Set speed=0 right now — Play() has already built the graph synchronously
         // before this method is called, so root is accessible immediately.
@@ -128,13 +131,16 @@ public class FlythroughController : MonoBehaviour
             _fpsTimer      = 0f;
         }
 
-        // CSV: append one row per interval.
+        // CSV: one row per 100 ms.
         _csvTimer += Time.unscaledDeltaTime;
         if (_csvTimer >= CSV_INTERVAL && _csv != null)
         {
             _csvTimer = 0f;
-            var csvMode = GraphicsSettings.variableRateShadingMode;
-            _csv.AppendLine($"{_elapsedRealTime:F1},{_measuredFPS:F1},{_currentPhase},{_currentSpeed:F3},{csvMode},{_vrsRendererCount}");
+            var csvMode  = GraphicsSettings.variableRateShadingMode;
+            int throttle = (_measuredFPS > 0f && _measuredFPS < _targetFps * 0.85f) ? 1 : 0;
+            _csv.AppendLine(
+                $"{_elapsedRealTime:F1},{_measuredFPS:F1},{_currentPhase},{_currentSpeed:F3}," +
+                $"{csvMode},{_vrsRendererCount},{throttle}");
         }
 
         // Line 1: performance numbers + selected config.
