@@ -1,4 +1,6 @@
 using System.Collections;
+using System.IO;
+using System.Text;
 using UnityEngine;
 using UnityEngine.Playables;
 using UnityEngine.Rendering;
@@ -59,6 +61,15 @@ public class FlythroughController : MonoBehaviour
     private float _measuredFPS;
     private float _elapsedRealTime;
 
+    // Current phase info (updated by DriveSpeed, read by Update for CSV)
+    private int   _currentPhase = 0;
+    private float _currentSpeed = 0f;
+
+    // CSV data logger
+    private StringBuilder _csv;
+    private float         _csvTimer;
+    private const float   CSV_INTERVAL = 0.5f;  // one row every 0.5 s = 120 rows over 60 s
+
     // UI — two lines
     private Text  _line1;   // measured fps | elapsed time | config
     private Text  _line2;   // VRS hardware caps + active mode (read live from engine)
@@ -75,6 +86,14 @@ public class FlythroughController : MonoBehaviour
         _configLabel       = configLabel;
         _vrsRendererCount  = vrsRendererCount;
         _running           = true;
+
+        // Initialise CSV — header row includes device info for context.
+        _csv = new StringBuilder();
+        _csv.AppendLine($"# Benchmark run: {System.DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+        _csv.AppendLine($"# Config: {configLabel}");
+        _csv.AppendLine($"# Device: {SystemInfo.deviceModel}  GPU: {SystemInfo.graphicsDeviceName}");
+        _csv.AppendLine($"# VRS caps: {SystemInfo.shadingRateTypeCaps}  Renderers modified: {vrsRendererCount}");
+        _csv.AppendLine("time_s,fps,phase,speed,vrs_mode,vrs_renderers");
 
         // Set speed=0 right now — Play() has already built the graph synchronously
         // before this method is called, so root is accessible immediately.
@@ -107,6 +126,15 @@ public class FlythroughController : MonoBehaviour
             _fpsAccum      = 0f;
             _fpsFrameCount = 0;
             _fpsTimer      = 0f;
+        }
+
+        // CSV: append one row per interval.
+        _csvTimer += Time.unscaledDeltaTime;
+        if (_csvTimer >= CSV_INTERVAL && _csv != null)
+        {
+            _csvTimer = 0f;
+            var csvMode = GraphicsSettings.variableRateShadingMode;
+            _csv.AppendLine($"{_elapsedRealTime:F1},{_measuredFPS:F1},{_currentPhase},{_currentSpeed:F3},{csvMode},{_vrsRendererCount}");
         }
 
         // Line 1: performance numbers + selected config.
@@ -149,6 +177,8 @@ public class FlythroughController : MonoBehaviour
 
             _director.playableGraph.GetRootPlayable(0).SetSpeed(speed);
             Debug.Log($"[Flythrough] Phase {phaseIndex}: speed={speed:F3}x  realDur={realDur}s");
+            _currentPhase = phaseIndex;
+            _currentSpeed = speed;
             phaseIndex++;
 
             yield return new WaitForSecondsRealtime(realDur);
@@ -190,7 +220,29 @@ public class FlythroughController : MonoBehaviour
         Cursor.lockState = CursorLockMode.None;
         Cursor.visible   = true;
 
+        WriteCSV();
+
         Debug.Log("[Flythrough] Run complete. Check 'VRS hw' line in overlay for hardware verification.");
+    }
+
+    // ── CSV output ───────────────────────────────────────────────────────────
+
+    private void WriteCSV()
+    {
+        if (_csv == null) return;
+        try
+        {
+            string path = Path.Combine(Application.persistentDataPath, "benchmark_results.csv");
+            File.WriteAllText(path, _csv.ToString());
+            Debug.Log($"[Flythrough] CSV saved → {path}");
+            // On HarmonyOS device, pull with:
+            //   hdc file recv /data/storage/el2/base/files/benchmark_results.csv ./
+            // On Android/Editor, path is in Application.persistentDataPath.
+        }
+        catch (System.Exception ex)
+        {
+            Debug.LogError($"[Flythrough] Failed to write CSV: {ex.Message}");
+        }
     }
 
     // ── FPS overlay construction ─────────────────────────────────────────────
