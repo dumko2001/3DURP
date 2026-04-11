@@ -1,7 +1,7 @@
 # Rendering Benchmark — Huawei Mobile (Phase 1)
 
 Unity app for benchmarking rendering performance on a Huawei mobile device.  
-Runs a fixed 60-second cinematic camera flythrough under selectable refresh-rate and VRS configurations and captures power draw.
+Runs a fixed 60-second cinematic camera flythrough under selectable refresh-rate and VRS configurations. Logs FPS, VRS state, and throttle events to CSV.
 
 > **Note:** This repository contains only the **custom logic and configuration**. The large environment assets must be reconstructed from the standard Tuanjie URP template.
 
