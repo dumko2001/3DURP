@@ -166,6 +166,7 @@ QualitySettings:
     - GameCoreXboxOne
     - Nintendo Switch
     - HMIAndroid
+    - OpenHarmony
   - serializedVersion: 3
     name: PC High
     pixelLightCount: 2
@@ -219,10 +220,12 @@ QualitySettings:
     - Nintendo Switch
     - iPhone
     - HMIAndroid
+    - OpenHarmony
   m_TextureMipmapLimitGroupNames: []
   m_PerPlatformDefaultQuality:
     Android: 1
     GameCoreXboxOne: 0
+    OpenHarmony: 1
     HMIAndroid: 1
     Lumin: 0
     Nintendo Switch: 0
