@@ -1,5 +1,6 @@
 using System.Collections;
 using Cinemachine;
+using StarterAssets;
 using UnityEngine;
 using UnityEngine.UI;
 using UnityEngine.Playables;
@@ -24,6 +25,7 @@ public class StartScreenUI : MonoBehaviour
     private PlayerManager     playerManager;
     private Text              statusText;        // shows current selection
     private Button            startButton;
+    private Button            recordReplayButton;
     private Button            runMatrixButton;
     private Button            flythroughModeButton;
     private Button            replayModeButton;
@@ -31,6 +33,11 @@ public class StartScreenUI : MonoBehaviour
     private Image             replayModeImage;
     private bool              isMatrixRunning;
     private BenchmarkRunMode  selectedRunMode = BenchmarkRunMode.CinematicFlythrough;
+    private StarterAssetsInputs gameplayInputs;
+    private bool gameplayCursorLockedDefault = true;
+    private bool gameplayCursorLookDefault   = true;
+    private InputRecorder      gameplayRecorder;
+    private bool               isRecordingGameplayPath;
 
     // Buttons arrays so we can highlight selected one
     private Image[] fpsBtnImages;
@@ -72,12 +79,32 @@ public class StartScreenUI : MonoBehaviour
             Debug.LogWarning("PlayerManager not found — flythrough may not play correctly.");
         }
 
-        // Free the cursor for UI interaction
-        Cursor.lockState = CursorLockMode.None;
-        Cursor.visible   = true;
+        gameplayInputs = FindObjectOfType<StarterAssetsInputs>(true);
+        if (gameplayInputs != null)
+        {
+            gameplayCursorLockedDefault = gameplayInputs.cursorLocked;
+            gameplayCursorLookDefault   = gameplayInputs.cursorInputForLook;
+        }
 
         EnsureEventSystem();
+        SetMenuInteractionState(true);
         BuildUI();
+    }
+
+    void Update()
+    {
+        if (!isRecordingGameplayPath || gameplayRecorder == null)
+            return;
+
+        if (gameplayRecorder.IsRecording)
+            return;
+
+        isRecordingGameplayPath = false;
+        canvasGO.SetActive(true);
+        SetMenuInteractionState(true);
+        statusText.text  = "Gameplay input recording saved. Select Gameplay Replay + FPS + VRS, then press START.";
+        statusText.color = new Color(0.70f, 1f, 0.70f, 1f);
+        RefreshModeVisuals();
     }
 
     // ── EventSystem management ───────────────────────────────────────
@@ -92,8 +119,6 @@ public class StartScreenUI : MonoBehaviour
         if (allES.Length == 0)
         {
             // No EventSystem in scene at all — create a minimal one.
-            // Uses StandaloneInputModule as fallback; the new Input System
-            // auto-upgrades it at runtime when the package is present.
             var esGO = new GameObject("EventSystem");
             esGO.AddComponent<EventSystem>();
             esGO.AddComponent<StandaloneInputModule>();
@@ -120,6 +145,30 @@ public class StartScreenUI : MonoBehaviour
             }
 
         Debug.Log($"[UI] Using EventSystem: {chosen.gameObject.name}");
+    }
+
+    void SetMenuInteractionState(bool menuVisible)
+    {
+        var allInputs = FindObjectsOfType<StarterAssetsInputs>(true);
+        if (allInputs.Length > 0)
+        {
+            gameplayInputs = allInputs[0];
+            foreach (var input in allInputs)
+            {
+                input.cursorLocked       = menuVisible ? false : gameplayCursorLockedDefault;
+                input.cursorInputForLook = menuVisible ? false : gameplayCursorLookDefault;
+                if (menuVisible)
+                {
+                    input.MoveInput(Vector2.zero);
+                    input.LookInput(Vector2.zero);
+                    input.JumpInput(false);
+                    input.SprintInput(false);
+                }
+            }
+        }
+
+        Cursor.lockState = menuVisible ? CursorLockMode.None : CursorLockMode.Locked;
+        Cursor.visible   = menuVisible;
     }
 
     // ── UI construction ──────────────────────────────────────────────
@@ -215,6 +264,18 @@ public class StartScreenUI : MonoBehaviour
                      OnStartClicked,
                      isStart: true).GetComponent<Button>();
 
+        recordReplayButton = MakeButton(panel.transform, "RECORD GAMEPLAY PATH",
+                    new Vector2(240, -225),
+                    new Vector2(250, 58),
+                    OnRecordReplayClicked).GetComponent<Button>();
+        var recordImage = recordReplayButton.GetComponent<Image>();
+        recordImage.color = new Color(0.66f, 0.22f, 0.16f, 1f);
+        var recordColors = recordReplayButton.colors;
+        recordColors.normalColor      = recordImage.color;
+        recordColors.highlightedColor = new Color(0.82f, 0.30f, 0.22f, 1f);
+        recordColors.pressedColor     = new Color(0.40f, 0.12f, 0.08f, 1f);
+        recordReplayButton.colors     = recordColors;
+
         runMatrixButton = MakeButton(panel.transform, "RUN ALL 12 REQUIRED",
                          new Vector2(0, -295),
                          new Vector2(320, 52),
@@ -228,7 +289,7 @@ public class StartScreenUI : MonoBehaviour
         runMatrixButton.colors        = matrixColors;
 
         MakeText(panel.transform,
-           "Cinematic uses the existing timeline path. Gameplay Replay uses gameplay_input_recording.bin. Matrix mode stays cinematic-only.",
+                                         "Cinematic uses the timeline path. Gameplay Replay uses gameplay_input_recording.bin. Use RECORD to create/refresh. During record: R toggles stop/save, Esc force-stops, C crouches.",
              14, FontStyle.Normal,
            new Vector2(0, -355), new Vector2(700, 42));
 
@@ -286,9 +347,53 @@ public class StartScreenUI : MonoBehaviour
         }
 
         if (selectedRunMode == BenchmarkRunMode.GameplayReplay)
-            StartReplayBenchmarkRun(selectedFPS, selectedVRS, BuildReplayCsvName(selectedFPS, selectedVRS));
+            StartReplayBenchmarkRun(selectedFPS, selectedVRS, BuildReplayCsvName(selectedFPS, selectedVRS), OnSingleRunComplete);
         else
-            StartBenchmarkRun(selectedFPS, selectedVRS, "benchmark_results.csv");
+            StartBenchmarkRun(selectedFPS, selectedVRS, "benchmark_results.csv", OnSingleRunComplete);
+    }
+
+    void OnRecordReplayClicked()
+    {
+        if (isMatrixRunning)
+            return;
+
+        if (selectedRunMode != BenchmarkRunMode.GameplayReplay)
+        {
+            statusText.text  = "Switch RUN MODE to Gameplay Replay, then press RECORD.";
+            statusText.color = new Color(1f, 0.82f, 0.40f, 1f);
+            return;
+        }
+
+        if (isRecordingGameplayPath)
+        {
+            statusText.text  = "Recording in progress. Press R to stop (toggle), or Esc to force-stop.";
+            statusText.color = new Color(1f, 1f, 1f, 0.9f);
+            return;
+        }
+
+        if (!TryStartGameplayRecordingSession())
+        {
+            statusText.text  = "Could not start recording. Check PlayerManager/camera setup in Oasis.";
+            statusText.color = new Color(1f, 0.4f, 0.4f, 1f);
+            return;
+        }
+
+        statusText.text  = "Recording gameplay path. Press R again to stop and save, or Esc to force-stop.";
+        statusText.color = new Color(1f, 1f, 1f, 0.9f);
+    }
+
+    void OnSingleRunComplete()
+    {
+        canvasGO.SetActive(true);
+        SetMenuInteractionState(true);
+
+        string modeLabel = selectedRunMode == BenchmarkRunMode.GameplayReplay
+            ? "Gameplay replay"
+            : "Cinematic run";
+        statusText.text  = $"{modeLabel} complete. Output saved to persistentDataPath.";
+        statusText.color = new Color(0.70f, 1f, 0.70f, 1f);
+        RefreshSelectionVisuals();
+        RefreshModeVisuals();
     }
 
     void OnAutoRunClicked()
@@ -333,8 +438,7 @@ public class StartScreenUI : MonoBehaviour
                     isMatrixRunning = false;
                     SetControlsInteractable(true);
                     canvasGO.SetActive(true);
-                    Cursor.lockState = CursorLockMode.None;
-                    Cursor.visible   = true;
+                    SetMenuInteractionState(true);
                     yield break;
                 }
 
@@ -343,6 +447,7 @@ public class StartScreenUI : MonoBehaviour
 
                 completedRuns++;
                 canvasGO.SetActive(true);
+                SetMenuInteractionState(true);
                 statusText.text = $"Completed {completedRuns}/{totalRuns}: {fps}fps | {vrsLabels[vrsMode]}";
                 statusText.color = new Color(0.70f, 1f, 0.70f, 1f);
                 yield return new WaitForSecondsRealtime(0.5f);
@@ -352,8 +457,7 @@ public class StartScreenUI : MonoBehaviour
         isMatrixRunning = false;
         SetControlsInteractable(true);
         canvasGO.SetActive(true);
-        Cursor.lockState = CursorLockMode.None;
-        Cursor.visible   = true;
+        SetMenuInteractionState(true);
         statusText.text  = "Required 12-case matrix complete. CSV files saved to persistentDataPath.";
         statusText.color = new Color(0.70f, 1f, 0.70f, 1f);
     }
@@ -388,12 +492,11 @@ public class StartScreenUI : MonoBehaviour
 
         // Hide UI
         canvasGO.SetActive(false);
+        SetMenuInteractionState(false);
 
         // Lock cursor so accidental mouse movement cannot trigger PlayerManager's
         // NotifyPlayerMoved() → EnableFirstPersonController() → director.SetActive(false)
         // which would dispose the PlayableGraph mid-run.
-        Cursor.lockState = CursorLockMode.Locked;
-        Cursor.visible   = false;
 
         // Trigger the flythrough via PlayerManager — this handles activating the
         // director GameObject, binding the CinemachineBrain to the Timeline track,
@@ -443,7 +546,10 @@ public class StartScreenUI : MonoBehaviour
                        ?? gameObject.AddComponent<InputReplayer>();
         if (!replayer.Load())
         {
-            statusText.text  = "Gameplay replay file not found — record an Oasis input path first.";
+            if (TryStartGameplayRecordingSession())
+                return false;
+
+            statusText.text  = "Gameplay replay file not found and recorder could not start.";
             statusText.color = new Color(1f, 0.4f, 0.4f, 1f);
             return false;
         }
@@ -452,8 +558,7 @@ public class StartScreenUI : MonoBehaviour
             return false;
 
         canvasGO.SetActive(false);
-        Cursor.lockState = CursorLockMode.Locked;
-        Cursor.visible   = false;
+        SetMenuInteractionState(false);
 
         var logger = gameObject.GetComponent<FlythroughController>()
                      ?? gameObject.AddComponent<FlythroughController>();
@@ -481,6 +586,39 @@ public class StartScreenUI : MonoBehaviour
             $"ReplayDurationSeconds: {replayer.Duration:F2}");
 
         Debug.Log($"[START] {fps}fps | VRS={vrsLabels[vrsMode]} | Replay={replayer.RecordingFileName}");
+        return true;
+    }
+
+    bool TryStartGameplayRecordingSession()
+    {
+        if (isRecordingGameplayPath)
+            return true;
+
+        gameplayRecorder = gameObject.GetComponent<InputRecorder>()
+                         ?? gameObject.AddComponent<InputRecorder>();
+        gameplayRecorder.autoStartOnPlay = false;
+        gameplayRecorder.toggleKey = KeyCode.R;
+
+        if (!PrepareGameplayReplayMode())
+            return false;
+
+        canvasGO.SetActive(false);
+        SetMenuInteractionState(false);
+        gameplayRecorder.StartRecording();
+
+        if (!gameplayRecorder.IsRecording)
+            return false;
+
+        isRecordingGameplayPath = true;
+        string savePath = InputRecorder.DefaultSavePath;
+        Debug.Log($"[START] Replay recording missing. Recording gameplay input now to: {savePath}");
+        Debug.Log("[START] Play normally. Press R again to stop and save, or Esc to force-stop. The benchmark menu will return automatically.");
+
+        if (statusText != null)
+        {
+            statusText.text  = "Recording gameplay path. Press R again to stop and save, or Esc to force-stop.";
+            statusText.color = new Color(1f, 1f, 1f, 0.9f);
+        }
         return true;
     }
 
@@ -544,6 +682,8 @@ public class StartScreenUI : MonoBehaviour
 
         if (startButton != null)
             startButton.interactable = interactable;
+        if (recordReplayButton != null)
+            recordReplayButton.interactable = interactable && selectedRunMode == BenchmarkRunMode.GameplayReplay;
         if (runMatrixButton != null)
             runMatrixButton.interactable = interactable && selectedRunMode == BenchmarkRunMode.CinematicFlythrough;
         if (flythroughModeButton != null)
@@ -577,6 +717,9 @@ public class StartScreenUI : MonoBehaviour
 
         if (runMatrixButton != null)
             runMatrixButton.interactable = !isMatrixRunning && selectedRunMode == BenchmarkRunMode.CinematicFlythrough;
+
+        if (recordReplayButton != null)
+            recordReplayButton.interactable = !isMatrixRunning && selectedRunMode == BenchmarkRunMode.GameplayReplay;
     }
 
     string BuildMatrixCsvName(int fps, int vrsMode)

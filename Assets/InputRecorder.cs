@@ -3,13 +3,14 @@
 //
 // This is intentionally not transform capture. The goal is to preserve the same
 // player/controller/collision/camera loop that live gameplay uses, including the
-// same move/look/jump/sprint state consumed by FirstPersonController.
+// same move/look/jump/sprint/crouch state consumed by FirstPersonController.
 //
 // Usage:
 //   1. Attach to the active player root (or any object in the scene).
 //   2. Ensure `inputSource` resolves to the Oasis StarterAssetsInputs component.
 //   3. Enter Play mode and play normally.
-//   4. Press R (or the configured toggleKey) to start/stop recording.
+//   4. Press R (or the configured toggleKey) to toggle recording start/stop.
+//      Press Esc (or stopKey) to force-stop recording.
 //   5. The .bin file is written to Application.persistentDataPath/gameplay_input_recording.bin.
 //
 // On HarmonyOS device, pull the recording with:
@@ -20,6 +21,9 @@ using System.IO;
 using StarterAssets;
 using UnityEngine;
 using UnityEngine.SceneManagement;
+#if ENABLE_INPUT_SYSTEM
+using UnityEngine.InputSystem;
+#endif
 
 [DefaultExecutionOrder(1000)]
 public class InputRecorder : MonoBehaviour
@@ -35,6 +39,9 @@ public class InputRecorder : MonoBehaviour
 
     [Tooltip("Keyboard shortcut to toggle recording on/off during Play mode.")]
     public KeyCode toggleKey = KeyCode.R;
+
+    [Tooltip("Secondary key to stop recording immediately during Play mode.")]
+    public KeyCode stopKey = KeyCode.Escape;
 
     [Tooltip("Automatically start recording when Play mode begins.")]
     public bool autoStartOnPlay;
@@ -61,11 +68,14 @@ public class InputRecorder : MonoBehaviour
 
     void Update()
     {
-        if (Input.GetKeyDown(toggleKey))
+        if (WasKeyPressed(toggleKey))
         {
             if (IsRecording) StopRecording();
             else             StartRecording();
         }
+
+        if (IsRecording && WasKeyPressed(stopKey))
+            StopRecording();
     }
 
     void LateUpdate()
@@ -80,6 +90,7 @@ public class InputRecorder : MonoBehaviour
             look   = inputSource.look,
             jump   = inputSource.jump,
             sprint = inputSource.sprint,
+            crouch = inputSource.crouch,
         });
     }
 
@@ -104,7 +115,7 @@ public class InputRecorder : MonoBehaviour
         _startTime  = Time.realtimeSinceStartup;
         IsRecording = true;
 
-        Debug.Log($"[InputRecorder] Recording gameplay input in {SceneLabel(_header.scenePath)} — press {toggleKey} to stop.");
+        Debug.Log($"[InputRecorder] Recording gameplay input in {SceneLabel(_header.scenePath)} — press {toggleKey} (or {stopKey}) to stop.");
     }
 
     public void StopRecording() => StopRecording(DefaultSavePath);
@@ -122,6 +133,32 @@ public class InputRecorder : MonoBehaviour
 
         float duration = _frames.Count > 0 ? _frames[_frames.Count - 1].t : 0f;
         Debug.Log($"[InputRecorder] Saved {_frames.Count} gameplay frames ({duration:F1}s) → {path}");
+    }
+
+    private static bool WasKeyPressed(KeyCode key)
+    {
+        if (key == KeyCode.None)
+            return false;
+
+#if ENABLE_INPUT_SYSTEM
+        var keyboard = Keyboard.current;
+        if (keyboard != null)
+        {
+            switch (key)
+            {
+                case KeyCode.R:      return keyboard.rKey.wasPressedThisFrame;
+                case KeyCode.Escape: return keyboard.escapeKey.wasPressedThisFrame;
+                case KeyCode.Space:  return keyboard.spaceKey.wasPressedThisFrame;
+                case KeyCode.C:      return keyboard.cKey.wasPressedThisFrame;
+            }
+        }
+#endif
+
+#if ENABLE_LEGACY_INPUT_MANAGER
+        return Input.GetKeyDown(key);
+#else
+        return false;
+#endif
     }
 
     private void ResolveReferences()
@@ -151,7 +188,7 @@ public class InputRecorder : MonoBehaviour
             Directory.CreateDirectory(dir);
 
         using var writer = new BinaryWriter(File.Open(path, FileMode.Create));
-        writer.Write(2);  // format version: gameplay input frames
+        writer.Write(3);  // format version: gameplay input frames + crouch
         writer.Write(_header.scenePath ?? "");
         writer.Write(_header.playerPosition.x);
         writer.Write(_header.playerPosition.y);
@@ -172,6 +209,7 @@ public class InputRecorder : MonoBehaviour
             writer.Write(frame.look.y);
             writer.Write(frame.jump);
             writer.Write(frame.sprint);
+            writer.Write(frame.crouch);
         }
     }
 
@@ -204,5 +242,6 @@ public class InputRecorder : MonoBehaviour
         public Vector2 look;
         public bool    jump;
         public bool    sprint;
+        public bool    crouch;
     }
 }

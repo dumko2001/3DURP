@@ -114,7 +114,7 @@ public class InputReplayer : MonoBehaviour
         {
             using var reader = new BinaryReader(File.OpenRead(path));
             int version = reader.ReadInt32();
-            if (version != 2)
+            if (version != 2 && version != 3)
             {
                 string detail = version == 1
                     ? "This file was written by the older transform-path recorder and cannot drive gameplay input. Record a new gameplay-input file first."
@@ -150,6 +150,7 @@ public class InputReplayer : MonoBehaviour
                     look   = new Vector2(reader.ReadSingle(), reader.ReadSingle()),
                     jump   = reader.ReadBoolean(),
                     sprint = reader.ReadBoolean(),
+                    crouch = version >= 3 && reader.ReadBoolean(),
                 };
             }
 
@@ -267,6 +268,7 @@ public class InputReplayer : MonoBehaviour
         targetInput.LookInput(frame.look);
         targetInput.JumpInput(frame.jump);
         targetInput.SprintInput(frame.sprint);
+        targetInput.CrouchInput(frame.crouch);
     }
 
     private void ApplyNeutralInput()
@@ -278,6 +280,7 @@ public class InputReplayer : MonoBehaviour
         targetInput.LookInput(Vector2.zero);
         targetInput.JumpInput(false);
         targetInput.SprintInput(false);
+        targetInput.CrouchInput(false);
     }
 
     private void FinishReplay()
@@ -351,5 +354,6 @@ public class InputReplayer : MonoBehaviour
         public Vector2 look;
         public bool    jump;
         public bool    sprint;
+        public bool    crouch;
     }
 }
