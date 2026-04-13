@@ -47,6 +47,13 @@ public class InputReplayer : MonoBehaviour
 
     public float Duration => IsLoaded ? _frames[_frames.Length - 1].t : 0f;
 
+    public string RecordingFileName => Path.GetFileName(
+        string.IsNullOrEmpty(recordingPath) ? InputRecorder.DefaultSavePath : recordingPath);
+
+    public string RecordingScenePath => _header.scenePath;
+
+    public string RecordingSceneName => SceneLabel(_header.scenePath);
+
     private RecordingHeader _header;
     private InputFrame[] _frames;
     private int _frameIndex;

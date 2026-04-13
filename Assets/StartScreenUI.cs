@@ -1,4 +1,5 @@
 using System.Collections;
+using Cinemachine;
 using UnityEngine;
 using UnityEngine.UI;
 using UnityEngine.Playables;
@@ -10,6 +11,12 @@ using UnityEngine.Rendering;
 // Automatically finds PlayableDirector and disables FPS controller.
 public class StartScreenUI : MonoBehaviour
 {
+    private enum BenchmarkRunMode
+    {
+        CinematicFlythrough,
+        GameplayReplay,
+    }
+
     // ── State ────────────────────────────────────────────────────────
     private int              selectedFPS    = -1;   // -1 = not chosen yet
     private int              selectedVRS    = -1;   // -1 = not chosen yet
@@ -18,7 +25,12 @@ public class StartScreenUI : MonoBehaviour
     private Text              statusText;        // shows current selection
     private Button            startButton;
     private Button            runMatrixButton;
+    private Button            flythroughModeButton;
+    private Button            replayModeButton;
+    private Image             flythroughModeImage;
+    private Image             replayModeImage;
     private bool              isMatrixRunning;
+    private BenchmarkRunMode  selectedRunMode = BenchmarkRunMode.CinematicFlythrough;
 
     // Buttons arrays so we can highlight selected one
     private Image[] fpsBtnImages;
@@ -126,32 +138,49 @@ public class StartScreenUI : MonoBehaviour
         // Semi-transparent background panel — centered
         var panel = MakePanel(canvasGO.transform,
                               new Color(0f, 0f, 0f, 0.82f),
-                              Vector2.zero, new Vector2(760, 580));
+                              Vector2.zero, new Vector2(760, 700));
 
         // Title
         MakeText(panel.transform, "Rendering Config", 38, FontStyle.Bold,
-                 new Vector2(0, 205), new Vector2(720, 55));
+                 new Vector2(0, 255), new Vector2(720, 55));
+
+        // ── Mode row ─────────────────────────────────────────────────
+        MakeText(panel.transform, "RUN MODE", 15, FontStyle.Normal,
+                 new Vector2(0, 190), new Vector2(720, 28));
+
+        flythroughModeButton = MakeButton(panel.transform,
+                              "CINEMATIC",
+                              new Vector2(-150, 140),
+                              new Vector2(230, 46),
+                              () => SetRunMode(BenchmarkRunMode.CinematicFlythrough)).GetComponent<Button>();
+        flythroughModeImage = flythroughModeButton.GetComponent<Image>();
+
+        replayModeButton = MakeButton(panel.transform,
+                          "GAMEPLAY REPLAY",
+                          new Vector2(150, 140),
+                          new Vector2(230, 46),
+                          () => SetRunMode(BenchmarkRunMode.GameplayReplay)).GetComponent<Button>();
+        replayModeImage = replayModeButton.GetComponent<Image>();
 
         // ── FPS row ──────────────────────────────────────────────────
         MakeText(panel.transform, "REFRESH RATE", 15, FontStyle.Normal,
-                 new Vector2(0, 145), new Vector2(720, 28));
+                 new Vector2(0, 80), new Vector2(720, 28));
 
         fpsBtnImages = new Image[fpsOptions.Length];
         for (int i = 0; i < fpsOptions.Length; i++)
         {
             int fpsCopy = fpsOptions[i];   // closure-safe copy
-            int idx     = i;
             var btn = MakeButton(panel.transform,
                                   fpsCopy + " fps",
-                                  new Vector2(-270 + i * 180, 95),
+                                  new Vector2(-270 + i * 180, 30),
                                   new Vector2(160, 48),
-                                  () => OnFPSSelected(fpsCopy, idx));
+                                  () => OnFPSSelected(fpsCopy));
             fpsBtnImages[i] = btn.GetComponent<Image>();
         }
 
         // ── VRS row ──────────────────────────────────────────────────
         MakeText(panel.transform, "SHADING RATE (VRS)", 15, FontStyle.Normal,
-                 new Vector2(0, 30), new Vector2(720, 28));
+                 new Vector2(0, -35), new Vector2(720, 28));
 
         vrsBtnImages = new Image[vrsLabels.Length];
         for (int i = 0; i < vrsLabels.Length; i++)
@@ -160,7 +189,7 @@ public class StartScreenUI : MonoBehaviour
             string labelCopy = vrsLabels[i];
             var btn = MakeButton(panel.transform,
                                   labelCopy,
-                                  new Vector2(-270 + i * 180, -20),
+                                  new Vector2(-270 + i * 180, -85),
                                   new Vector2(160, 48),
                                   () => OnVRSSelected(modeCopy));
             vrsBtnImages[i] = btn.GetComponent<Image>();
@@ -170,24 +199,24 @@ public class StartScreenUI : MonoBehaviour
         var statusGO = new GameObject("Status");
         statusGO.transform.SetParent(panel.transform, false);
         statusText = statusGO.AddComponent<Text>();
-        statusText.text      = "Select refresh and VRS, or run the required 12-case matrix";
+        statusText.text      = "Select mode, refresh and VRS to start.";
         statusText.fontSize  = 16;
         statusText.color     = new Color(1f, 1f, 1f, 0.6f);
         statusText.alignment = TextAnchor.MiddleCenter;
         statusText.font      = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
         var srt              = statusGO.GetComponent<RectTransform>();
-        srt.anchoredPosition = new Vector2(0, -85);
+        srt.anchoredPosition = new Vector2(0, -150);
         srt.sizeDelta        = new Vector2(720, 30);
 
         // ── START button — disabled until both are selected ───────────
         startButton = MakeButton(panel.transform, "START",
-                     new Vector2(0, -165),
+                     new Vector2(0, -225),
                      new Vector2(220, 58),
                      OnStartClicked,
                      isStart: true).GetComponent<Button>();
 
         runMatrixButton = MakeButton(panel.transform, "RUN ALL 12 REQUIRED",
-                         new Vector2(0, -235),
+                         new Vector2(0, -295),
                          new Vector2(320, 52),
                          OnAutoRunClicked).GetComponent<Button>();
         var matrixImage = runMatrixButton.GetComponent<Image>();
@@ -199,13 +228,15 @@ public class StartScreenUI : MonoBehaviour
         runMatrixButton.colors        = matrixColors;
 
         MakeText(panel.transform,
-             "Required matrix = 4 refresh caps × 3 VRS modes. VRS Off stays available as a manual baseline.",
+           "Cinematic uses the existing timeline path. Gameplay Replay uses gameplay_input_recording.bin. Matrix mode stays cinematic-only.",
              14, FontStyle.Normal,
-             new Vector2(0, -295), new Vector2(700, 42));
+           new Vector2(0, -355), new Vector2(700, 42));
+
+       SetRunMode(selectedRunMode);
     }
 
     // ── Selection handlers ───────────────────────────────────────────
-    void OnFPSSelected(int fps, int idx)
+    void OnFPSSelected(int fps)
     {
         selectedFPS = fps;
         RefreshSelectionVisuals();
@@ -221,11 +252,21 @@ public class StartScreenUI : MonoBehaviour
         Debug.Log($"VRS selected: {vrsLabels[mode]}");
     }
 
+    void SetRunMode(BenchmarkRunMode mode)
+    {
+        selectedRunMode = mode;
+        RefreshModeVisuals();
+        UpdateStatus();
+    }
+
     void UpdateStatus()
     {
+        string modeStr = selectedRunMode == BenchmarkRunMode.CinematicFlythrough
+            ? "Cinematic"
+            : "Gameplay Replay";
         string fpsStr = selectedFPS  == -1 ? "?" : selectedFPS + "fps";
         string vrsStr = selectedVRS  == -1 ? "?" : vrsLabels[selectedVRS];
-        statusText.text  = $"Selected:  {fpsStr}  |  {vrsStr}";
+        statusText.text  = $"Mode: {modeStr}  |  {fpsStr}  |  {vrsStr}";
         statusText.color = new Color(1f, 1f, 1f,
                            (selectedFPS != -1 && selectedVRS != -1) ? 1f : 0.6f);
     }
@@ -244,13 +285,23 @@ public class StartScreenUI : MonoBehaviour
             return;
         }
 
-        StartBenchmarkRun(selectedFPS, selectedVRS, "benchmark_results.csv");
+        if (selectedRunMode == BenchmarkRunMode.GameplayReplay)
+            StartReplayBenchmarkRun(selectedFPS, selectedVRS, BuildReplayCsvName(selectedFPS, selectedVRS));
+        else
+            StartBenchmarkRun(selectedFPS, selectedVRS, "benchmark_results.csv");
     }
 
     void OnAutoRunClicked()
     {
         if (isMatrixRunning)
             return;
+
+        if (selectedRunMode != BenchmarkRunMode.CinematicFlythrough)
+        {
+            statusText.text  = "12-case matrix is only available in Cinematic mode.";
+            statusText.color = new Color(1f, 0.82f, 0.40f, 1f);
+            return;
+        }
 
         StartCoroutine(RunRequiredMatrix());
     }
@@ -271,7 +322,7 @@ public class StartScreenUI : MonoBehaviour
             {
                 selectedFPS = fps;
                 selectedVRS = vrsMode;
-                HighlightSelections(fps, vrsMode);
+                HighlightSelections();
 
                 bool runComplete = false;
                 string csvFileName = BuildMatrixCsvName(fps, vrsMode);
@@ -382,7 +433,90 @@ public class StartScreenUI : MonoBehaviour
         return true;
     }
 
-    void HighlightSelections(int fps, int vrsMode)
+    bool StartReplayBenchmarkRun(int fps, int vrsMode, string csvFileName, System.Action onRunComplete = null)
+    {
+        QualitySettings.vSyncCount  = 0;
+        Application.targetFrameRate = fps;
+        vrsRendererCount = ApplyVRS(vrsMode);
+
+        var replayer = gameObject.GetComponent<InputReplayer>()
+                       ?? gameObject.AddComponent<InputReplayer>();
+        if (!replayer.Load())
+        {
+            statusText.text  = "Gameplay replay file not found — record an Oasis input path first.";
+            statusText.color = new Color(1f, 0.4f, 0.4f, 1f);
+            return false;
+        }
+
+        if (!PrepareGameplayReplayMode())
+            return false;
+
+        canvasGO.SetActive(false);
+        Cursor.lockState = CursorLockMode.Locked;
+        Cursor.visible   = false;
+
+        var logger = gameObject.GetComponent<FlythroughController>()
+                     ?? gameObject.AddComponent<FlythroughController>();
+        string replayScene = string.IsNullOrWhiteSpace(replayer.RecordingSceneName)
+            ? "Oasis"
+            : replayer.RecordingSceneName;
+        string configLabel = $"{fps}fps | {vrsLabels[vrsMode]} | Gameplay Replay";
+
+        logger.StartMeasuredRun(
+            configLabel,
+            vrsRendererCount,
+            replayer.Duration,
+            fps,
+            csvFileName,
+            onRunStart: () =>
+            {
+                if (!replayer.StartReplay(() => logger.CompleteMeasuredRun()))
+                    logger.CompleteMeasuredRun();
+            },
+            onRunComplete: onRunComplete,
+            "Mode: GameplayReplay",
+            $"Scenario: {replayScene}",
+            $"ReplayFile: {replayer.RecordingFileName}",
+            $"ReplayScenePath: {replayer.RecordingScenePath}",
+            $"ReplayDurationSeconds: {replayer.Duration:F2}");
+
+        Debug.Log($"[START] {fps}fps | VRS={vrsLabels[vrsMode]} | Replay={replayer.RecordingFileName}");
+        return true;
+    }
+
+    bool PrepareGameplayReplayMode()
+    {
+        if (playerManager == null)
+        {
+            statusText.text  = "PlayerManager missing — cannot start gameplay replay.";
+            statusText.color = new Color(1f, 0.4f, 0.4f, 1f);
+            Debug.LogError("[START] PlayerManager missing — cannot start gameplay replay!");
+            return false;
+        }
+
+        var virtualCameraField = typeof(PlayerManager).GetField(
+            "m_VirtualCamera",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        if (virtualCameraField != null && virtualCameraField.GetValue(playerManager) == null)
+        {
+            var virtualCamera = playerManager.GetComponentInChildren<CinemachineVirtualCamera>(true);
+            if (virtualCamera == null)
+            {
+                statusText.text  = "Cinemachine virtual camera missing — cannot start gameplay replay.";
+                statusText.color = new Color(1f, 0.4f, 0.4f, 1f);
+                Debug.LogError("[START] CinemachineVirtualCamera missing — gameplay replay cannot switch to first-person mode.");
+                return false;
+            }
+
+            virtualCameraField.SetValue(playerManager, virtualCamera);
+        }
+
+        playerManager.EnableFirstPersonController();
+        playerManager.enabled = false;
+        return true;
+    }
+
+    void HighlightSelections()
     {
         RefreshSelectionVisuals();
     }
@@ -392,6 +526,7 @@ public class StartScreenUI : MonoBehaviour
         if (interactable)
         {
             RefreshSelectionVisuals();
+            RefreshModeVisuals();
         }
         else
         {
@@ -400,12 +535,21 @@ public class StartScreenUI : MonoBehaviour
 
             foreach (var image in vrsBtnImages)
                 image.color = COL_DISABLED;
+
+            if (flythroughModeImage != null)
+                flythroughModeImage.color = COL_DISABLED;
+            if (replayModeImage != null)
+                replayModeImage.color = COL_DISABLED;
         }
 
         if (startButton != null)
             startButton.interactable = interactable;
         if (runMatrixButton != null)
-            runMatrixButton.interactable = interactable;
+            runMatrixButton.interactable = interactable && selectedRunMode == BenchmarkRunMode.CinematicFlythrough;
+        if (flythroughModeButton != null)
+            flythroughModeButton.interactable = interactable;
+        if (replayModeButton != null)
+            replayModeButton.interactable = interactable;
     }
 
     void RefreshSelectionVisuals()
@@ -423,9 +567,26 @@ public class StartScreenUI : MonoBehaviour
         }
     }
 
+    void RefreshModeVisuals()
+    {
+        if (flythroughModeImage != null)
+            flythroughModeImage.color = selectedRunMode == BenchmarkRunMode.CinematicFlythrough ? COL_SELECTED : COL_IDLE;
+
+        if (replayModeImage != null)
+            replayModeImage.color = selectedRunMode == BenchmarkRunMode.GameplayReplay ? COL_SELECTED : COL_IDLE;
+
+        if (runMatrixButton != null)
+            runMatrixButton.interactable = !isMatrixRunning && selectedRunMode == BenchmarkRunMode.CinematicFlythrough;
+    }
+
     string BuildMatrixCsvName(int fps, int vrsMode)
     {
         return $"benchmark_results_{fps}fps_{vrsLabels[vrsMode].Replace(" ", string.Empty)}.csv";
+    }
+
+    string BuildReplayCsvName(int fps, int vrsMode)
+    {
+        return $"benchmark_results_replay_{fps}fps_{vrsLabels[vrsMode].Replace(" ", string.Empty)}.csv";
     }
 
     // Returns the number of scene renderers that received the VRS rate.

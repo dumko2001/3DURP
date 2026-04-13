@@ -8,7 +8,8 @@ using UnityEngine.Rendering;
 using UnityEngine.UI;
 
 /// <summary>
-/// Two responsibilities:
+/// Shared benchmark runtime for both cinematic flythrough runs and gameplay replay runs.
+/// It provides:
 ///
 /// 1. SPEED SCHEDULE — drives the PlayableDirector at varying speeds so that
 ///    35 s of Timeline content fills exactly 60 s of wall-clock time:
@@ -78,6 +79,8 @@ public class FlythroughController : MonoBehaviour
     private GameObject _overlayCanvas;
     private Action _runCompleteCallback;
     private string _csvFileName = "benchmark_results.csv";
+    private string[] _csvMetadataLines = Array.Empty<string>();
+    private float _runDurationSeconds = TOTAL_REAL_DURATION;
 
     // ── Public API ───────────────────────────────────────────────────────────
 
@@ -93,29 +96,11 @@ public class FlythroughController : MonoBehaviour
         StopAllCoroutines();
 
         _director          = director;
-        _configLabel       = configLabel;
-        _vrsRendererCount  = vrsRendererCount;
-        _targetFps         = targetFps;
-        _csvFileName       = string.IsNullOrWhiteSpace(csvFileName) ? "benchmark_results.csv" : csvFileName;
-        _runCompleteCallback = onRunComplete;
-        _running           = true;
-
-        _fpsAccum        = 0f;
-        _fpsFrameCount   = 0;
-        _fpsTimer        = 0f;
-        _measuredFPS     = 0f;
-        _elapsedRealTime = 0f;
+        _csvMetadataLines  = Array.Empty<string>();
+        _runDurationSeconds = TOTAL_REAL_DURATION;
         _currentPhase    = 0;
         _currentSpeed    = 0f;
-        _csvTimer        = 0f;
-
-        // Initialise CSV.
-        _csv = new StringBuilder();
-        _csv.AppendLine($"# Benchmark run: {System.DateTime.Now:yyyy-MM-dd HH:mm:ss}");
-        _csv.AppendLine($"# Config: {configLabel}");
-        _csv.AppendLine($"# Device: {SystemInfo.deviceModel}  GPU: {SystemInfo.graphicsDeviceName}");
-        _csv.AppendLine($"# VRS caps: {SystemInfo.shadingRateTypeCaps}  Renderers modified: {vrsRendererCount}");
-        _csv.AppendLine("time_s,fps,phase,speed,vrs_mode,vrs_renderers,throttle");
+        BeginMeasuredRun(configLabel, vrsRendererCount, targetFps, csvFileName, onRunComplete);
 
         // Set speed=0 right now — Play() has already built the graph synchronously
         // before this method is called, so root is accessible immediately.
@@ -128,6 +113,65 @@ public class FlythroughController : MonoBehaviour
         BuildOverlay();
         StartCoroutine(DriveSpeed());
         StartCoroutine(HardStop());
+    }
+
+    public void StartMeasuredRun(string configLabel, int vrsRendererCount, float runDurationSeconds,
+                                 int targetFps = 60, string csvFileName = "benchmark_results.csv",
+                                 Action onRunStart = null, Action onRunComplete = null,
+                                 params string[] metadataLines)
+    {
+        StopAllCoroutines();
+
+        _director = null;
+        _csvMetadataLines = metadataLines ?? Array.Empty<string>();
+        _runDurationSeconds = Mathf.Max(0.5f, runDurationSeconds);
+        _currentPhase = -1;
+        _currentSpeed = 0f;
+        BeginMeasuredRun(configLabel, vrsRendererCount, targetFps, csvFileName, onRunComplete);
+
+        BuildOverlay();
+        StartCoroutine(HardStop());
+        onRunStart?.Invoke();
+    }
+
+    public void CompleteMeasuredRun()
+    {
+        if (!_running)
+            return;
+
+        StopAllCoroutines();
+        if (_director != null && _director.state == PlayState.Playing)
+            _director.Stop();
+
+        FinishRun();
+    }
+
+    private void BeginMeasuredRun(string configLabel, int vrsRendererCount, int targetFps,
+                                  string csvFileName, Action onRunComplete)
+    {
+        _configLabel = configLabel;
+        _vrsRendererCount = vrsRendererCount;
+        _targetFps = targetFps;
+        _csvFileName = string.IsNullOrWhiteSpace(csvFileName) ? "benchmark_results.csv" : csvFileName;
+        _runCompleteCallback = onRunComplete;
+        _running = true;
+
+        _fpsAccum = 0f;
+        _fpsFrameCount = 0;
+        _fpsTimer = 0f;
+        _measuredFPS = 0f;
+        _elapsedRealTime = 0f;
+        _csvTimer = 0f;
+
+        _csv = new StringBuilder();
+        _csv.AppendLine($"# Benchmark run: {System.DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+        _csv.AppendLine($"# Config: {configLabel}");
+        _csv.AppendLine($"# Device: {SystemInfo.deviceModel}  GPU: {SystemInfo.graphicsDeviceName}");
+        _csv.AppendLine($"# VRS caps: {SystemInfo.shadingRateTypeCaps}  Renderers modified: {vrsRendererCount}");
+        foreach (string metadata in _csvMetadataLines)
+            if (!string.IsNullOrWhiteSpace(metadata))
+                _csv.AppendLine($"# {metadata}");
+        _csv.AppendLine("time_s,fps,phase,speed,vrs_mode,vrs_renderers,throttle");
     }
 
     // ── MonoBehaviour ────────────────────────────────────────────────────────
@@ -211,7 +255,7 @@ public class FlythroughController : MonoBehaviour
 
         // Content exhausted — director stops automatically via DirectorWrapMode.None.
         // Restore speed in case anything re-uses this director later.
-        if (_director.playableGraph.IsValid())
+        if (_director != null && _director.playableGraph.IsValid())
             _director.playableGraph.GetRootPlayable(0).SetSpeed(1.0);
 
         Debug.Log("[Flythrough] Speed schedule complete — 60 s consumed.");
@@ -221,14 +265,22 @@ public class FlythroughController : MonoBehaviour
     // is already stopped. If something kept it alive, stop it now and mark run done.
     private IEnumerator HardStop()
     {
-        yield return new WaitForSecondsRealtime(TOTAL_REAL_DURATION + 0.5f);
+        yield return new WaitForSecondsRealtime(_runDurationSeconds + 0.5f);
+
+        if (!_running)
+            yield break;
 
         if (_director != null && _director.state == PlayState.Playing)
         {
             _director.Stop();
-            Debug.LogWarning("[Flythrough] Hard-stop triggered — director was still playing at 60.5 s.");
+            Debug.LogWarning($"[Flythrough] Hard-stop triggered — director was still playing at {_runDurationSeconds + 0.5f:F1} s.");
         }
 
+        FinishRun();
+    }
+
+    private void FinishRun()
+    {
         _running = false;
 
         // Show run-complete state on overlay so it's clear the benchmark finished.
@@ -265,7 +317,7 @@ public class FlythroughController : MonoBehaviour
             File.WriteAllText(path, _csv.ToString());
             Debug.Log($"[Flythrough] CSV saved → {path}");
             // On HarmonyOS device, pull with:
-            //   hdc file recv /data/storage/el2/base/files/benchmark_results.csv ./
+            //   hdc file recv /data/storage/el2/base/files/<csv-file-name> ./
             // On Android/Editor, path is in Application.persistentDataPath.
         }
         catch (System.Exception ex)
