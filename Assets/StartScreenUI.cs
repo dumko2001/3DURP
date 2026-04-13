@@ -1,3 +1,4 @@
+using System.Collections;
 using UnityEngine;
 using UnityEngine.UI;
 using UnityEngine.Playables;
@@ -12,9 +13,12 @@ public class StartScreenUI : MonoBehaviour
     // ── State ────────────────────────────────────────────────────────
     private int              selectedFPS    = -1;   // -1 = not chosen yet
     private int              selectedVRS    = -1;   // -1 = not chosen yet
-    private GameObject        canvasGO;
+    private GameObject       canvasGO;
     private PlayerManager     playerManager;
     private Text              statusText;        // shows current selection
+    private Button            startButton;
+    private Button            runMatrixButton;
+    private bool              isMatrixRunning;
 
     // Buttons arrays so we can highlight selected one
     private Image[] fpsBtnImages;
@@ -23,6 +27,7 @@ public class StartScreenUI : MonoBehaviour
 
     // ── Config options ───────────────────────────────────────────────
     private readonly int[]    fpsOptions  = { 120, 60, 40, 30 };
+    private readonly int[]    requiredVrsModes = { 1, 2, 3 };
     private readonly string[] vrsLabels   = { "VRS Off", "1x2", "2x2", "4x4" };
 
     // ── Colors ───────────────────────────────────────────────────────
@@ -121,7 +126,7 @@ public class StartScreenUI : MonoBehaviour
         // Semi-transparent background panel — centered
         var panel = MakePanel(canvasGO.transform,
                               new Color(0f, 0f, 0f, 0.82f),
-                              Vector2.zero, new Vector2(760, 500));
+                              Vector2.zero, new Vector2(760, 580));
 
         // Title
         MakeText(panel.transform, "Rendering Config", 38, FontStyle.Bold,
@@ -165,7 +170,7 @@ public class StartScreenUI : MonoBehaviour
         var statusGO = new GameObject("Status");
         statusGO.transform.SetParent(panel.transform, false);
         statusText = statusGO.AddComponent<Text>();
-        statusText.text      = "Select refresh rate and shading rate";
+        statusText.text      = "Select refresh and VRS, or run the required 12-case matrix";
         statusText.fontSize  = 16;
         statusText.color     = new Color(1f, 1f, 1f, 0.6f);
         statusText.alignment = TextAnchor.MiddleCenter;
@@ -175,20 +180,35 @@ public class StartScreenUI : MonoBehaviour
         srt.sizeDelta        = new Vector2(720, 30);
 
         // ── START button — disabled until both are selected ───────────
-        MakeButton(panel.transform, "START",
-                   new Vector2(0, -160),
-                   new Vector2(220, 58),
-                   OnStartClicked,
-                   isStart: true);
+        startButton = MakeButton(panel.transform, "START",
+                     new Vector2(0, -165),
+                     new Vector2(220, 58),
+                     OnStartClicked,
+                     isStart: true).GetComponent<Button>();
+
+        runMatrixButton = MakeButton(panel.transform, "RUN ALL 12 REQUIRED",
+                         new Vector2(0, -235),
+                         new Vector2(320, 52),
+                         OnAutoRunClicked).GetComponent<Button>();
+        var matrixImage = runMatrixButton.GetComponent<Image>();
+        matrixImage.color = new Color(0.80f, 0.44f, 0.16f, 1f);
+        var matrixColors = runMatrixButton.colors;
+        matrixColors.normalColor      = matrixImage.color;
+        matrixColors.highlightedColor = new Color(0.92f, 0.55f, 0.23f, 1f);
+        matrixColors.pressedColor     = new Color(0.48f, 0.24f, 0.08f, 1f);
+        runMatrixButton.colors        = matrixColors;
+
+        MakeText(panel.transform,
+             "Required matrix = 4 refresh caps × 3 VRS modes. VRS Off stays available as a manual baseline.",
+             14, FontStyle.Normal,
+             new Vector2(0, -295), new Vector2(700, 42));
     }
 
     // ── Selection handlers ───────────────────────────────────────────
     void OnFPSSelected(int fps, int idx)
     {
         selectedFPS = fps;
-        // Highlight selected, reset others
-        for (int i = 0; i < fpsBtnImages.Length; i++)
-            fpsBtnImages[i].color = (i == idx) ? COL_SELECTED : COL_IDLE;
+        RefreshSelectionVisuals();
         UpdateStatus();
         Debug.Log($"FPS selected: {fps}");
     }
@@ -196,8 +216,7 @@ public class StartScreenUI : MonoBehaviour
     void OnVRSSelected(int mode)
     {
         selectedVRS = mode;
-        for (int i = 0; i < vrsBtnImages.Length; i++)
-            vrsBtnImages[i].color = (i == mode) ? COL_SELECTED : COL_IDLE;
+        RefreshSelectionVisuals();
         UpdateStatus();
         Debug.Log($"VRS selected: {vrsLabels[mode]}");
     }
@@ -214,6 +233,9 @@ public class StartScreenUI : MonoBehaviour
     // ── Start handler ────────────────────────────────────────────────
     void OnStartClicked()
     {
+        if (isMatrixRunning)
+            return;
+
         // Guard — both must be selected
         if (selectedFPS == -1 || selectedVRS == -1)
         {
@@ -222,12 +244,96 @@ public class StartScreenUI : MonoBehaviour
             return;
         }
 
+        StartBenchmarkRun(selectedFPS, selectedVRS, "benchmark_results.csv");
+    }
+
+    void OnAutoRunClicked()
+    {
+        if (isMatrixRunning)
+            return;
+
+        StartCoroutine(RunRequiredMatrix());
+    }
+
+    IEnumerator RunRequiredMatrix()
+    {
+        isMatrixRunning = true;
+        SetControlsInteractable(false);
+        statusText.text  = "Running required 12-case matrix...";
+        statusText.color = Color.white;
+
+        int totalRuns = fpsOptions.Length * requiredVrsModes.Length;
+        int completedRuns = 0;
+
+        foreach (int fps in fpsOptions)
+        {
+            foreach (int vrsMode in requiredVrsModes)
+            {
+                selectedFPS = fps;
+                selectedVRS = vrsMode;
+                HighlightSelections(fps, vrsMode);
+
+                bool runComplete = false;
+                string csvFileName = BuildMatrixCsvName(fps, vrsMode);
+                statusText.text = $"Running {completedRuns + 1}/{totalRuns}: {fps}fps | {vrsLabels[vrsMode]}";
+
+                if (!StartBenchmarkRun(fps, vrsMode, csvFileName, () => runComplete = true))
+                {
+                    isMatrixRunning = false;
+                    SetControlsInteractable(true);
+                    canvasGO.SetActive(true);
+                    Cursor.lockState = CursorLockMode.None;
+                    Cursor.visible   = true;
+                    yield break;
+                }
+
+                while (!runComplete)
+                    yield return null;
+
+                completedRuns++;
+                canvasGO.SetActive(true);
+                statusText.text = $"Completed {completedRuns}/{totalRuns}: {fps}fps | {vrsLabels[vrsMode]}";
+                statusText.color = new Color(0.70f, 1f, 0.70f, 1f);
+                yield return new WaitForSecondsRealtime(0.5f);
+            }
+        }
+
+        isMatrixRunning = false;
+        SetControlsInteractable(true);
+        canvasGO.SetActive(true);
+        Cursor.lockState = CursorLockMode.None;
+        Cursor.visible   = true;
+        statusText.text  = "Required 12-case matrix complete. CSV files saved to persistentDataPath.";
+        statusText.color = new Color(0.70f, 1f, 0.70f, 1f);
+    }
+
+    bool StartBenchmarkRun(int fps, int vrsMode, string csvFileName, System.Action onRunComplete = null)
+    {
         // Apply frame rate cap
         QualitySettings.vSyncCount  = 0;
-        Application.targetFrameRate = selectedFPS;
+        Application.targetFrameRate = fps;
 
         // Apply VRS — captures renderer count for the overlay
-        vrsRendererCount = ApplyVRS(selectedVRS);
+        vrsRendererCount = ApplyVRS(vrsMode);
+
+        if (playerManager == null)
+        {
+            statusText.text  = "PlayerManager missing — cannot start flythrough.";
+            statusText.color = new Color(1f, 0.4f, 0.4f, 1f);
+            Debug.LogError("[START] PlayerManager missing — cannot start flythrough!");
+            return false;
+        }
+
+        // playerManager.enabled stays FALSE — public methods are still callable.
+        var dir = playerManager.FlythroughDirector;
+        if (dir == null)
+        {
+            statusText.text  = "FlythroughDirector missing on PlayerManager.";
+            statusText.color = new Color(1f, 0.4f, 0.4f, 1f);
+            Debug.LogError("[START] FlythroughDirector is not assigned on PlayerManager. " +
+                           "Open the Manager GameObject in Inspector and assign the Cinematic Timeline director.");
+            return false;
+        }
 
         // Hide UI
         canvasGO.SetActive(false);
@@ -244,50 +350,82 @@ public class StartScreenUI : MonoBehaviour
         // IMPORTANT: keep PlayerManager DISABLED after the call. Re-enabling it
         // would restart its Update() loop which watches for mouse/touch and calls
         // EnableFirstPersonController(), stopping the flythrough.
-        if (playerManager != null)
+        dir.extrapolationMode = DirectorWrapMode.None;  // stop cleanly at end
+        dir.time = 0;
+        playerManager.EnableFlythrough();
+
+        // CRITICAL: clear m_InFlythrough via reflection immediately after EnableFlythrough().
+        // Why: PlayerManager.Start() was skipped (component disabled before it ran), so
+        // m_VirtualCamera is null. The InputSystem '<pointer>/press' action in
+        // StarterAssetsInputs fires on ANY screen tap or mouse click, which calls
+        // CameraManager.NotifyPlayerMoved(). That method calls EnableFirstPersonController()
+        // only when m_InFlythrough==true, and that crashes on m_VirtualCamera being null.
+        // Setting it false makes NotifyPlayerMoved() a safe no-op for the entire run.
+        // The director keeps playing; FlythroughController manages it directly.
+        var inFlyField = typeof(PlayerManager).GetField(
+            "m_InFlythrough",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        if (inFlyField != null)
+            inFlyField.SetValue(playerManager, false);
+        else
+            Debug.LogWarning("[START] Reflection: m_InFlythrough not found — accidental tap may break flythrough.");
+
+        // Start the speed-schedule controller that shapes a 35 s timeline into
+        // exactly 60 s: 10 s static + 50 s motion at varying speeds.
+        // Also shows the live FPS overlay on screen.
+        var controller = gameObject.GetComponent<FlythroughController>()
+                         ?? gameObject.AddComponent<FlythroughController>();
+        string configLabel = $"{fps}fps | {vrsLabels[vrsMode]}";
+        controller.StartFlythrough(dir, configLabel, vrsRendererCount, fps, csvFileName, onRunComplete);
+
+        Debug.Log($"[START] {fps}fps | VRS={vrsLabels[vrsMode]}");
+        return true;
+    }
+
+    void HighlightSelections(int fps, int vrsMode)
+    {
+        RefreshSelectionVisuals();
+    }
+
+    void SetControlsInteractable(bool interactable)
+    {
+        if (interactable)
         {
-            // playerManager.enabled stays FALSE — public methods are still callable.
-            var dir = playerManager.FlythroughDirector;
-            if (dir == null)
-            {
-                Debug.LogError("[START] FlythroughDirector is not assigned on PlayerManager. " +
-                               "Open the Manager GameObject in Inspector and assign the Cinematic Timeline director.");
-                return;
-            }
-            dir.extrapolationMode = DirectorWrapMode.None;  // stop cleanly at end
-            dir.time = 0;
-            playerManager.EnableFlythrough();
-
-            // CRITICAL: clear m_InFlythrough via reflection immediately after EnableFlythrough().
-            // Why: PlayerManager.Start() was skipped (component disabled before it ran), so
-            // m_VirtualCamera is null. The InputSystem '<pointer>/press' action in
-            // StarterAssetsInputs fires on ANY screen tap or mouse click, which calls
-            // CameraManager.NotifyPlayerMoved(). That method calls EnableFirstPersonController()
-            // only when m_InFlythrough==true, and that crashes on m_VirtualCamera being null.
-            // Setting it false makes NotifyPlayerMoved() a safe no-op for the entire run.
-            // The director keeps playing; FlythroughController manages it directly.
-            var inFlyField = typeof(PlayerManager).GetField(
-                "m_InFlythrough",
-                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            if (inFlyField != null)
-                inFlyField.SetValue(playerManager, false);
-            else
-                Debug.LogWarning("[START] Reflection: m_InFlythrough not found — accidental tap may break flythrough.");
-
-            // Start the speed-schedule controller that shapes a 35 s timeline into
-            // exactly 60 s: 10 s static + 50 s motion at varying speeds.
-            // Also shows the live FPS overlay on screen.
-            var controller = gameObject.GetComponent<FlythroughController>()
-                             ?? gameObject.AddComponent<FlythroughController>();
-            string configLabel = $"{selectedFPS}fps | {vrsLabels[selectedVRS]}";
-            controller.StartFlythrough(dir, configLabel, vrsRendererCount, selectedFPS);
+            RefreshSelectionVisuals();
         }
         else
         {
-            Debug.LogError("[START] PlayerManager missing — cannot start flythrough!");
+            foreach (var image in fpsBtnImages)
+                image.color = COL_DISABLED;
+
+            foreach (var image in vrsBtnImages)
+                image.color = COL_DISABLED;
         }
 
-        Debug.Log($"[START] {selectedFPS}fps | VRS={vrsLabels[selectedVRS]}");
+        if (startButton != null)
+            startButton.interactable = interactable;
+        if (runMatrixButton != null)
+            runMatrixButton.interactable = interactable;
+    }
+
+    void RefreshSelectionVisuals()
+    {
+        if (fpsBtnImages != null)
+        {
+            for (int i = 0; i < fpsBtnImages.Length; i++)
+                fpsBtnImages[i].color = (fpsOptions[i] == selectedFPS) ? COL_SELECTED : COL_IDLE;
+        }
+
+        if (vrsBtnImages != null)
+        {
+            for (int i = 0; i < vrsBtnImages.Length; i++)
+                vrsBtnImages[i].color = (i == selectedVRS) ? COL_SELECTED : COL_IDLE;
+        }
+    }
+
+    string BuildMatrixCsvName(int fps, int vrsMode)
+    {
+        return $"benchmark_results_{fps}fps_{vrsLabels[vrsMode].Replace(" ", string.Empty)}.csv";
     }
 
     // Returns the number of scene renderers that received the VRS rate.

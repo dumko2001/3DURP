@@ -54,23 +54,23 @@ The benchmark runs in the Oasis scene. `StartScreenUI` (on the Manager GO) handl
 
 ### Step 1 — Export from Tuanjie
 1. **File → Build Settings** → select **OpenHarmony** as platform (switch if needed).
-2. Player Settings:
-   - *Minimum API Level*: API 10 (HarmonyOS 4.0).
-   - *Scripting Backend*: IL2CPP.
-   - *Target Architectures*: ARM64.
+2. Export configuration:
+    - *Scripting Backend*: IL2CPP.
+    - *Target Architectures*: ARM64.
+    - The current exported Harmony project resolves to `compatibleSdkVersion 6.0.0(20)` and `targetSdkVersion 6.0.1(21)`.
 3. Click **Export Project** — Tuanjie generates an hvigor project folder (not a HAP directly).
 
 ### Step 2 — Build HAP in DevEco Studio
 1. Open DevEco Studio → **Open** the exported hvigor project folder.
 2. Let it sync Gradle/hvigor dependencies.
-3. Connect Huawei device via USB (USB debugging on).
-4. **Build → Build Hap(s)/App(s) → Build Debug Hap(s)** — or press the Run button to build + deploy in one step.
+3. **Build → Build Hap(s)/App(s) → Build Debug Hap(s)** to produce the debug HAP.
+4. If a Huawei device or supported OpenHarmony emulator is available, press **Run** to install and launch.
 5. The `.hap` file is output to `build/default/outputs/default/`.
 
 ### Step 3 — Manual install (optional, if sharing HAP directly)
 ```bash
 hdc install path/to/app.hap
-hdc shell aa start -a EntryAbility -b com.unity.template.urpsample
+hdc shell aa start -a TuanjiePlayerAbility -b com.com.freelance.OasisBenchmark
 ```
 
 ---
@@ -79,7 +79,6 @@ hdc shell aa start -a EntryAbility -b com.unity.template.urpsample
 
 - `Assets/StartScreenUI.cs`: Main benchmark harness and VRS logic.
 - `Assets/FlythroughController.cs`: FPS overlay and 60s speed schedule controller.
-- `Assets/CameraRecorder.cs`: Existing frame capture utility.
 
 ---
 
@@ -88,3 +87,4 @@ hdc shell aa start -a EntryAbility -b com.unity.template.urpsample
 - ✅ **VRS Implemented:** Uses Tuanjie's `GraphicsSettings.variableRateShadingMode` and `Renderer.shadingRate` API.
 - ✅ **60s Schedule:** `FlythroughController.cs` drives the 35s Timeline over exactly 60s of wall-clock time.
 - ✅ **FPS Overlay:** Live performance stats shown top-left during the run.
+- ✅ **12-case Matrix Runner:** Start screen can now launch the SOW-required 12 combinations as separate runs with separate CSV files.

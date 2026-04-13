@@ -1,3 +1,4 @@
+using System;
 using System.Collections;
 using System.IO;
 using System.Text;
@@ -74,6 +75,9 @@ public class FlythroughController : MonoBehaviour
     // UI — two lines
     private Text  _line1;   // measured fps | elapsed time | config
     private Text  _line2;   // VRS hardware caps + active mode (read live from engine)
+    private GameObject _overlayCanvas;
+    private Action _runCompleteCallback;
+    private string _csvFileName = "benchmark_results.csv";
 
     // ── Public API ───────────────────────────────────────────────────────────
 
@@ -82,13 +86,28 @@ public class FlythroughController : MonoBehaviour
     /// vrsRendererCount: number of scene renderers that received a VRS rate (0 = VRS Off).
     /// targetFps: the Application.targetFrameRate that was applied — used for throttle detection.
     /// </summary>
-    public void StartFlythrough(PlayableDirector director, string configLabel, int vrsRendererCount, int targetFps = 60)
+    public void StartFlythrough(PlayableDirector director, string configLabel, int vrsRendererCount,
+                                int targetFps = 60, string csvFileName = "benchmark_results.csv",
+                                Action onRunComplete = null)
     {
+        StopAllCoroutines();
+
         _director          = director;
         _configLabel       = configLabel;
         _vrsRendererCount  = vrsRendererCount;
         _targetFps         = targetFps;
+        _csvFileName       = string.IsNullOrWhiteSpace(csvFileName) ? "benchmark_results.csv" : csvFileName;
+        _runCompleteCallback = onRunComplete;
         _running           = true;
+
+        _fpsAccum        = 0f;
+        _fpsFrameCount   = 0;
+        _fpsTimer        = 0f;
+        _measuredFPS     = 0f;
+        _elapsedRealTime = 0f;
+        _currentPhase    = 0;
+        _currentSpeed    = 0f;
+        _csvTimer        = 0f;
 
         // Initialise CSV.
         _csv = new StringBuilder();
@@ -228,6 +247,10 @@ public class FlythroughController : MonoBehaviour
 
         WriteCSV();
 
+        Action runCompleteCallback = _runCompleteCallback;
+        _runCompleteCallback = null;
+        runCompleteCallback?.Invoke();
+
         Debug.Log("[Flythrough] Run complete. Check 'VRS hw' line in overlay for hardware verification.");
     }
 
@@ -238,7 +261,7 @@ public class FlythroughController : MonoBehaviour
         if (_csv == null) return;
         try
         {
-            string path = Path.Combine(Application.persistentDataPath, "benchmark_results.csv");
+            string path = Path.Combine(Application.persistentDataPath, _csvFileName);
             File.WriteAllText(path, _csv.ToString());
             Debug.Log($"[Flythrough] CSV saved → {path}");
             // On HarmonyOS device, pull with:
@@ -255,18 +278,24 @@ public class FlythroughController : MonoBehaviour
 
     private void BuildOverlay()
     {
-        var canvasGO = new GameObject("FPS_Overlay");
-        var canvas   = canvasGO.AddComponent<Canvas>();
+        if (_overlayCanvas != null)
+        {
+            _overlayCanvas.SetActive(true);
+            return;
+        }
+
+        _overlayCanvas = new GameObject("FPS_Overlay");
+        var canvas = _overlayCanvas.AddComponent<Canvas>();
         canvas.renderMode   = RenderMode.ScreenSpaceOverlay;
         canvas.sortingOrder = 1000;  // above StartCanvas (999)
-        var scaler = canvasGO.AddComponent<CanvasScaler>();
+        var scaler = _overlayCanvas.AddComponent<CanvasScaler>();
         scaler.uiScaleMode         = CanvasScaler.ScaleMode.ScaleWithScreenSize;
         scaler.referenceResolution = new Vector2(1920, 1080);
-        canvasGO.AddComponent<GraphicRaycaster>();
+        _overlayCanvas.AddComponent<GraphicRaycaster>();
 
         // Dark pill — tall enough for two lines (two 32px rows + 8px padding).
         var bgGO  = new GameObject("BG");
-        bgGO.transform.SetParent(canvasGO.transform, false);
+        bgGO.transform.SetParent(_overlayCanvas.transform, false);
         var bgImg = bgGO.AddComponent<Image>();
         bgImg.color = new Color(0f, 0f, 0f, 0.62f);
         var bgRT  = bgGO.GetComponent<RectTransform>();
