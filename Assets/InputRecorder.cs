@@ -1,59 +1,62 @@
 // InputRecorder.cs
-// Records camera/player transform snapshots and raw input axis values to a binary
-// file during a manual play session.  The resulting file can then be replayed by
-// InputReplayer to produce a deterministic, human-driven camera path without a
-// character controller — more realistic than a hand-authored Timeline because the
-// path came from actual user movement, and still deterministic because replay
-// drives the transform directly (no physics integration drift).
+// Records real gameplay input from StarterAssetsInputs for Oasis benchmarking.
+//
+// This is intentionally not transform capture. The goal is to preserve the same
+// player/controller/collision/camera loop that live gameplay uses, including the
+// same move/look/jump/sprint state consumed by FirstPersonController.
 //
 // Usage:
-//   1. Attach to the active camera or player root in the scene.
-//   2. Enter Play mode and manually walk/fly through the scene.
-//   3. Press R (or the configured toggleKey) to start recording; press again to stop.
-//   4. The .bin file is written to Application.persistentDataPath/recorded_path.bin.
-//   5. That file is read by InputReplayer at benchmark time.
+//   1. Attach to the active player root (or any object in the scene).
+//   2. Ensure `inputSource` resolves to the Oasis StarterAssetsInputs component.
+//   3. Enter Play mode and play normally.
+//   4. Press R (or the configured toggleKey) to start/stop recording.
+//   5. The .bin file is written to Application.persistentDataPath/gameplay_input_recording.bin.
 //
 // On HarmonyOS device, pull the recording with:
-//   hdc file recv /data/storage/el2/base/files/recorded_path.bin ./recorded_path.bin
+//   hdc file recv /data/storage/el2/base/files/gameplay_input_recording.bin ./gameplay_input_recording.bin
 
 using System.Collections.Generic;
 using System.IO;
+using StarterAssets;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
+[DefaultExecutionOrder(1000)]
 public class InputRecorder : MonoBehaviour
 {
-    [Tooltip("Transform whose position and rotation are captured each sample. " +
-             "Defaults to this GameObject's transform if left blank.")]
-    public Transform target;
+    [Tooltip("StarterAssetsInputs source to sample. Defaults to the first one found in the active scene.")]
+    public StarterAssetsInputs inputSource;
 
-    [Tooltip("How many snapshots to capture per second.")]
-    public float recordHz = 60f;
+    [Tooltip("Player root transform controlled by FirstPersonController. Defaults to inputSource.transform.")]
+    public Transform playerRoot;
+
+    [Tooltip("Optional FirstPersonController used to capture the starting camera pitch.")]
+    public FirstPersonController controller;
 
     [Tooltip("Keyboard shortcut to toggle recording on/off during Play mode.")]
     public KeyCode toggleKey = KeyCode.R;
 
-    // ── Public state ─────────────────────────────────────────────────────────
+    [Tooltip("Automatically start recording when Play mode begins.")]
+    public bool autoStartOnPlay;
 
     public bool IsRecording { get; private set; }
 
-    /// <summary>Default on-device path used by both recorder and replayer.</summary>
     public static string DefaultSavePath =>
-        Path.Combine(Application.persistentDataPath, "recorded_path.bin");
+        Path.Combine(Application.persistentDataPath, "gameplay_input_recording.bin");
 
-    // ── Internal ─────────────────────────────────────────────────────────────
-
-    private readonly List<PathSample> _samples = new();
+    private readonly List<InputFrame> _frames = new();
     private float _startTime;
-    private float _nextSampleTime;
-    private float _interval;
-
-    // ── Unity lifecycle ───────────────────────────────────────────────────────
+    private RecordingHeader _header;
 
     void Awake()
     {
-        if (target == null)
-            target = transform;
-        _interval = 1f / Mathf.Max(1f, recordHz);
+        ResolveReferences();
+    }
+
+    void Start()
+    {
+        if (autoStartOnPlay)
+            StartRecording();
     }
 
     void Update()
@@ -67,61 +70,79 @@ public class InputRecorder : MonoBehaviour
 
     void LateUpdate()
     {
-        if (!IsRecording) return;
+        if (!IsRecording || inputSource == null)
+            return;
 
-        float elapsed = Time.realtimeSinceStartup - _startTime;
-        if (elapsed < _nextSampleTime) return;
-
-        _nextSampleTime += _interval;
-
-        _samples.Add(new PathSample
+        _frames.Add(new InputFrame
         {
-            t      = elapsed,
-            pos    = target.position,
-            rot    = target.rotation,
-            axisH  = Input.GetAxisRaw("Horizontal"),
-            axisV  = Input.GetAxisRaw("Vertical"),
-            mouseX = Input.GetAxisRaw("Mouse X"),
-            mouseY = Input.GetAxisRaw("Mouse Y"),
+            t      = Time.realtimeSinceStartup - _startTime,
+            move   = inputSource.move,
+            look   = inputSource.look,
+            jump   = inputSource.jump,
+            sprint = inputSource.sprint,
         });
     }
 
-    // ── Public API ────────────────────────────────────────────────────────────
-
-    /// <summary>Begin capturing; clears any previously held samples.</summary>
     public void StartRecording()
     {
-        _samples.Clear();
-        _startTime      = Time.realtimeSinceStartup;
-        _nextSampleTime = 0f;
-        IsRecording     = true;
-        Debug.Log($"[InputRecorder] Recording started — press {toggleKey} to stop");
+        ResolveReferences();
+        if (inputSource == null || playerRoot == null)
+        {
+            Debug.LogError("[InputRecorder] StarterAssetsInputs/player root not found — cannot record gameplay input.");
+            return;
+        }
+
+        _frames.Clear();
+        _header = new RecordingHeader
+        {
+            scenePath      = SceneManager.GetActiveScene().path,
+            playerPosition = playerRoot.position,
+            playerRotation = playerRoot.rotation,
+            cameraPitch    = CaptureCameraPitch(),
+        };
+
+        _startTime  = Time.realtimeSinceStartup;
+        IsRecording = true;
+
+        Debug.Log($"[InputRecorder] Recording gameplay input in {SceneLabel(_header.scenePath)} — press {toggleKey} to stop.");
     }
 
-    /// <summary>Stop capturing and write to <see cref="DefaultSavePath"/>.</summary>
     public void StopRecording() => StopRecording(DefaultSavePath);
 
-    /// <summary>Stop capturing and write to the specified path.</summary>
     public void StopRecording(string path)
     {
+        if (!IsRecording && _frames.Count == 0)
+        {
+            Debug.LogWarning("[InputRecorder] No gameplay input has been recorded yet.");
+            return;
+        }
+
         IsRecording = false;
         WriteBinary(path);
-        float duration = _samples.Count > 0 ? _samples[_samples.Count - 1].t : 0f;
-        Debug.Log($"[InputRecorder] Saved {_samples.Count} samples " +
-                  $"({duration:F1}s @ {recordHz}Hz) → {path}");
+
+        float duration = _frames.Count > 0 ? _frames[_frames.Count - 1].t : 0f;
+        Debug.Log($"[InputRecorder] Saved {_frames.Count} gameplay frames ({duration:F1}s) → {path}");
     }
 
-    // ── Persistence ───────────────────────────────────────────────────────────
+    private void ResolveReferences()
+    {
+        if (inputSource == null)
+            inputSource = FindObjectOfType<StarterAssetsInputs>(true);
 
-    // Binary format (version 1):
-    //   int32   version      = 1
-    //   float32 recordHz
-    //   int32   sampleCount
-    //   per sample:
-    //     float32  t          (seconds since StartRecording)
-    //     float32  pos.x/y/z
-    //     float32  rot.x/y/z/w  (Quaternion)
-    //     float32  axisH, axisV, mouseX, mouseY  (raw input axes, stored for reference)
+        if (playerRoot == null && inputSource != null)
+            playerRoot = inputSource.transform;
+
+        if (controller == null && inputSource != null)
+            controller = inputSource.GetComponent<FirstPersonController>();
+    }
+
+    private float CaptureCameraPitch()
+    {
+        if (controller == null || controller.CinemachineCameraTarget == null)
+            return 0f;
+
+        return NormalizeSignedAngle(controller.CinemachineCameraTarget.transform.localEulerAngles.x);
+    }
 
     private void WriteBinary(string path)
     {
@@ -129,27 +150,59 @@ public class InputRecorder : MonoBehaviour
         if (!string.IsNullOrEmpty(dir))
             Directory.CreateDirectory(dir);
 
-        using var w = new BinaryWriter(File.Open(path, FileMode.Create));
-        w.Write(1);              // format version
-        w.Write(recordHz);
-        w.Write(_samples.Count);
-        foreach (var s in _samples)
+        using var writer = new BinaryWriter(File.Open(path, FileMode.Create));
+        writer.Write(2);  // format version: gameplay input frames
+        writer.Write(_header.scenePath ?? "");
+        writer.Write(_header.playerPosition.x);
+        writer.Write(_header.playerPosition.y);
+        writer.Write(_header.playerPosition.z);
+        writer.Write(_header.playerRotation.x);
+        writer.Write(_header.playerRotation.y);
+        writer.Write(_header.playerRotation.z);
+        writer.Write(_header.playerRotation.w);
+        writer.Write(_header.cameraPitch);
+        writer.Write(_frames.Count);
+
+        foreach (var frame in _frames)
         {
-            w.Write(s.t);
-            w.Write(s.pos.x); w.Write(s.pos.y); w.Write(s.pos.z);
-            w.Write(s.rot.x); w.Write(s.rot.y); w.Write(s.rot.z); w.Write(s.rot.w);
-            w.Write(s.axisH); w.Write(s.axisV);
-            w.Write(s.mouseX); w.Write(s.mouseY);
+            writer.Write(frame.t);
+            writer.Write(frame.move.x);
+            writer.Write(frame.move.y);
+            writer.Write(frame.look.x);
+            writer.Write(frame.look.y);
+            writer.Write(frame.jump);
+            writer.Write(frame.sprint);
         }
     }
 
-    // ── Data types ────────────────────────────────────────────────────────────
-
-    private struct PathSample
+    private static float NormalizeSignedAngle(float angle)
     {
-        public float      t;
-        public Vector3    pos;
-        public Quaternion rot;
-        public float      axisH, axisV, mouseX, mouseY;
+        if (angle > 180f)
+            angle -= 360f;
+        return angle;
+    }
+
+    private static string SceneLabel(string scenePath)
+    {
+        return string.IsNullOrEmpty(scenePath)
+            ? "<unsaved scene>"
+            : Path.GetFileNameWithoutExtension(scenePath);
+    }
+
+    private struct RecordingHeader
+    {
+        public string     scenePath;
+        public Vector3    playerPosition;
+        public Quaternion playerRotation;
+        public float      cameraPitch;
+    }
+
+    private struct InputFrame
+    {
+        public float   t;
+        public Vector2 move;
+        public Vector2 look;
+        public bool    jump;
+        public bool    sprint;
     }
 }

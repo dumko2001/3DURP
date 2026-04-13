@@ -1,76 +1,94 @@
 // InputReplayer.cs
-// Replays a path file produced by InputRecorder by driving a target Transform
-// directly — no character controller, no physics integration, no input polling.
-// This makes each replay deterministic regardless of frame rate, so benchmark
-// results across VRS modes and FPS caps remain comparable.
+// Replays gameplay input back through StarterAssetsInputs so the real Oasis
+// first-person controller, CharacterController, gravity, collisions, and camera
+// logic all remain active during the run.
 //
-// Why transform-based replay instead of raw-input replay:
-//   Raw input (stick/mouse values) must pass through the character controller's
-//   velocity integration, which is frame-rate dependent.  Two runs at different
-//   FPS targets will produce slightly different camera positions, making GPU
-//   load comparisons noisy.  Driving the transform directly removes that
-//   variable while still using a path that came from real user movement.
-//
-// Integration with the benchmark harness:
-//   InputReplayer uses the same onRunComplete Action callback pattern as
-//   FlythroughController, so StartScreenUI can treat both interchangeably.
-//   The FlythroughController's FPS overlay and CSV writer are independent
-//   components and can run alongside a replay.
-//
-// Typical setup:
-//   1. Attach InputReplayer to the scene Manager (or any persistent GO).
-//   2. Set `target` to the active camera root.
-//   3. Call Load() once (e.g. in Awake or just before the first run).
-//   4. Call StartReplay(onComplete) to begin; pass the same completion
-//      callback you would pass to FlythroughController.StartFlythrough().
+// This intentionally keeps the natural noise that comes from live controller
+// integration. The comparison target is "what does VRS change during gameplay?",
+// not "what does VRS change on a perfectly fixed camera path?"
 
 using System;
-using System.Collections;
 using System.IO;
+using System.Reflection;
+using StarterAssets;
 using UnityEngine;
+using UnityEngine.SceneManagement;
+#if ENABLE_INPUT_SYSTEM
+using UnityEngine.InputSystem;
+#endif
 
+[DefaultExecutionOrder(-1000)]
 public class InputReplayer : MonoBehaviour
 {
-    [Tooltip("Transform to animate during replay (usually the camera root or player).")]
-    public Transform target;
+    [Tooltip("StarterAssetsInputs target to drive. Defaults to the first one found in the active scene.")]
+    public StarterAssetsInputs targetInput;
 
-    [Tooltip("Path to the .bin file written by InputRecorder. " +
-             "Defaults to InputRecorder.DefaultSavePath if left blank.")]
+    [Tooltip("Player root transform controlled by FirstPersonController. Defaults to targetInput.transform.")]
+    public Transform playerRoot;
+
+    [Tooltip("Optional FirstPersonController used to reset controller state and apply recorded pitch.")]
+    public FirstPersonController controller;
+
+    [Tooltip("Path to the .bin recording written by InputRecorder. Defaults to InputRecorder.DefaultSavePath if blank.")]
     public string recordingPath;
 
-    // ── Public state ─────────────────────────────────────────────────────────
+    [Tooltip("Automatically load the configured recording on Awake.")]
+    public bool loadOnAwake;
 
-    public bool IsReplaying  { get; private set; }
+    [Tooltip("Disable PlayerInput while replay is active so live touches/mouse/controller input cannot interfere.")]
+    public bool disableLivePlayerInput = true;
 
-    /// <summary>Total duration of the loaded recording in seconds, or 0 if none loaded.</summary>
-    public float Duration => (_frames != null && _frames.Length > 0)
-        ? _frames[_frames.Length - 1].t
-        : 0f;
+    [Tooltip("Warn if the loaded recording was captured in a different scene.")]
+    public bool warnOnSceneMismatch = true;
 
-    /// <summary>True after a successful Load() call.</summary>
-    public bool IsLoaded => _frames != null;
+    public bool IsReplaying { get; private set; }
 
-    // ── Internal ─────────────────────────────────────────────────────────────
+    public bool IsLoaded => _frames != null && _frames.Length > 0;
 
-    private ReplayFrame[] _frames;
-    private float         _recordHz;
+    public float Duration => IsLoaded ? _frames[_frames.Length - 1].t : 0f;
 
-    // ── Unity lifecycle ───────────────────────────────────────────────────────
+    private RecordingHeader _header;
+    private InputFrame[] _frames;
+    private int _frameIndex;
+    private float _startTime;
+    private Action _onComplete;
+
+#if ENABLE_INPUT_SYSTEM
+    private PlayerInput _playerInput;
+    private bool _restorePlayerInput;
+#endif
+
+    private const BindingFlags PrivateInstance = BindingFlags.NonPublic | BindingFlags.Instance;
+
+    private static readonly FieldInfo PitchField = typeof(FirstPersonController).GetField("_cinemachineTargetPitch", PrivateInstance);
+    private static readonly FieldInfo SpeedField = typeof(FirstPersonController).GetField("_speed", PrivateInstance);
+    private static readonly FieldInfo RotationVelocityField = typeof(FirstPersonController).GetField("_rotationVelocity", PrivateInstance);
+    private static readonly FieldInfo VerticalVelocityField = typeof(FirstPersonController).GetField("_verticalVelocity", PrivateInstance);
+    private static readonly FieldInfo JumpTimeoutField = typeof(FirstPersonController).GetField("_jumpTimeoutDelta", PrivateInstance);
+    private static readonly FieldInfo FallTimeoutField = typeof(FirstPersonController).GetField("_fallTimeoutDelta", PrivateInstance);
 
     void Awake()
     {
-        if (target == null)
-            target = transform;
+        ResolveReferences();
+        if (loadOnAwake)
+            Load();
     }
 
-    // ── Public API ────────────────────────────────────────────────────────────
+    void Update()
+    {
+        if (!IsReplaying || !IsLoaded)
+            return;
 
-    /// <summary>
-    /// Read a recording from disk and prepare it for playback.
-    /// Call once before <see cref="StartReplay"/>.
-    /// </summary>
-    /// <param name="path">Path to .bin file; uses <see cref="InputRecorder.DefaultSavePath"/> if null.</param>
-    /// <returns>True on success, false if the file is missing or corrupt (error logged).</returns>
+        float elapsed = Time.realtimeSinceStartup - _startTime;
+        while (_frameIndex < _frames.Length - 1 && _frames[_frameIndex + 1].t <= elapsed)
+            _frameIndex++;
+
+        ApplyFrame(_frames[_frameIndex]);
+
+        if (elapsed >= _frames[_frames.Length - 1].t)
+            FinishReplay();
+    }
+
     public bool Load(string path = null)
     {
         if (string.IsNullOrEmpty(path))
@@ -87,34 +105,49 @@ public class InputReplayer : MonoBehaviour
 
         try
         {
-            using var r   = new BinaryReader(File.OpenRead(path));
-            int version   = r.ReadInt32();
-            if (version != 1)
+            using var reader = new BinaryReader(File.OpenRead(path));
+            int version = reader.ReadInt32();
+            if (version != 2)
             {
-                Debug.LogError($"[InputReplayer] Unknown recording format version {version}");
+                string detail = version == 1
+                    ? "This file was written by the older transform-path recorder and cannot drive gameplay input. Record a new gameplay-input file first."
+                    : $"Unknown recording format version {version}.";
+                Debug.LogError($"[InputReplayer] {detail}");
                 _frames = null;
                 return false;
             }
 
-            _recordHz     = r.ReadSingle();
-            int count     = r.ReadInt32();
-            _frames       = new ReplayFrame[count];
-
-            for (int i = 0; i < count; i++)
+            _header = new RecordingHeader
             {
-                _frames[i] = new ReplayFrame
-                {
-                    t   = r.ReadSingle(),
-                    pos = new Vector3(r.ReadSingle(), r.ReadSingle(), r.ReadSingle()),
-                    rot = new Quaternion(r.ReadSingle(), r.ReadSingle(),
-                                        r.ReadSingle(), r.ReadSingle()),
-                };
-                // Raw input axes are stored for reference; skip them during replay.
-                r.ReadSingle(); r.ReadSingle(); r.ReadSingle(); r.ReadSingle();
+                scenePath      = reader.ReadString(),
+                playerPosition = new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle()),
+                playerRotation = new Quaternion(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle()),
+                cameraPitch    = reader.ReadSingle(),
+            };
+
+            int count = reader.ReadInt32();
+            if (count <= 0)
+            {
+                Debug.LogError("[InputReplayer] Recording contains no gameplay frames.");
+                _frames = null;
+                return false;
             }
 
-            Debug.Log($"[InputReplayer] Loaded {count} frames " +
-                      $"({count / _recordHz:F1}s @ {_recordHz}Hz) from {path}");
+            _frames = new InputFrame[count];
+            for (int i = 0; i < count; i++)
+            {
+                _frames[i] = new InputFrame
+                {
+                    t      = reader.ReadSingle(),
+                    move   = new Vector2(reader.ReadSingle(), reader.ReadSingle()),
+                    look   = new Vector2(reader.ReadSingle(), reader.ReadSingle()),
+                    jump   = reader.ReadBoolean(),
+                    sprint = reader.ReadBoolean(),
+                };
+            }
+
+            recordingPath = path;
+            Debug.Log($"[InputReplayer] Loaded {count} gameplay frames ({Duration:F1}s) from {path}");
             return true;
         }
         catch (Exception ex)
@@ -125,83 +158,191 @@ public class InputReplayer : MonoBehaviour
         }
     }
 
-    /// <summary>
-    /// Start replaying the loaded path.  Drives <see cref="target"/> until the
-    /// path ends, then calls <paramref name="onComplete"/>.
-    /// </summary>
-    /// <returns>False if no recording is loaded (call Load() first).</returns>
     public bool StartReplay(Action onComplete = null)
     {
-        if (_frames == null)
+        if (!IsLoaded)
         {
-            Debug.LogError("[InputReplayer] No recording loaded — call Load() before StartReplay().");
+            Debug.LogError("[InputReplayer] No gameplay recording loaded — call Load() before StartReplay().");
             return false;
         }
+
+        ResolveReferences();
+        if (targetInput == null || playerRoot == null)
+        {
+            Debug.LogError("[InputReplayer] StarterAssetsInputs/player root not found — cannot replay gameplay input.");
+            return false;
+        }
+
+        if (warnOnSceneMismatch)
+            WarnIfSceneDiffers();
+
         if (IsReplaying)
             StopReplay();
 
-        if (target == null)
-            target = transform;
+        SetLiveInputEnabled(false);
+        ResetToRecordedStart();
 
-        StartCoroutine(ReplayCoroutine(onComplete));
+        _frameIndex  = 0;
+        _startTime   = Time.realtimeSinceStartup;
+        _onComplete  = onComplete;
+        IsReplaying  = true;
+
+        ApplyFrame(_frames[0]);
+        Debug.Log($"[InputReplayer] Replaying gameplay input in {SceneLabel(_header.scenePath)}.");
         return true;
     }
 
-    /// <summary>Stop an in-progress replay immediately.</summary>
     public void StopReplay()
     {
-        StopAllCoroutines();
-        IsReplaying = false;
+        if (!IsReplaying)
+            return;
+
+        EndReplay(false);
     }
 
-    // ── Replay coroutine ─────────────────────────────────────────────────────
-
-    private IEnumerator ReplayCoroutine(Action onComplete)
+    private void ResolveReferences()
     {
-        IsReplaying = true;
-        float startReal = Time.realtimeSinceStartup;
-        int   idx       = 0;
+        if (targetInput == null)
+            targetInput = FindObjectOfType<StarterAssetsInputs>(true);
 
-        while (true)
+        if (playerRoot == null && targetInput != null)
+            playerRoot = targetInput.transform;
+
+        if (controller == null && targetInput != null)
+            controller = targetInput.GetComponent<FirstPersonController>();
+
+#if ENABLE_INPUT_SYSTEM
+        if (_playerInput == null && targetInput != null)
+            _playerInput = targetInput.GetComponent<PlayerInput>();
+#endif
+    }
+
+    private void WarnIfSceneDiffers()
+    {
+        string activeScene = SceneManager.GetActiveScene().path;
+        if (!string.IsNullOrEmpty(_header.scenePath) && !string.Equals(activeScene, _header.scenePath, StringComparison.Ordinal))
         {
-            float elapsed = Time.realtimeSinceStartup - startReal;
+            Debug.LogWarning($"[InputReplayer] Recording was captured in {SceneLabel(_header.scenePath)} but active scene is {SceneLabel(activeScene)}.");
+        }
+    }
 
-            // Advance index to the last frame whose timestamp we have passed.
-            while (idx < _frames.Length - 1 && _frames[idx + 1].t <= elapsed)
-                idx++;
+    private void ResetToRecordedStart()
+    {
+        var characterController = controller != null ? controller.GetComponent<CharacterController>() : null;
+        bool reenableController = characterController != null && characterController.enabled;
+        if (reenableController)
+            characterController.enabled = false;
 
-            if (idx >= _frames.Length - 1)
-            {
-                // Reached or passed the final frame — snap and finish.
-                target.position = _frames[_frames.Length - 1].pos;
-                target.rotation = _frames[_frames.Length - 1].rot;
-                break;
-            }
+        playerRoot.SetPositionAndRotation(_header.playerPosition, _header.playerRotation);
 
-            // Lerp between the surrounding frames for smooth sub-frame motion.
-            float span  = _frames[idx + 1].t - _frames[idx].t;
-            float local = elapsed - _frames[idx].t;
-            float frac  = span > 0f ? Mathf.Clamp01(local / span) : 1f;
+        if (controller != null)
+        {
+            if (controller.CinemachineCameraTarget != null)
+                controller.CinemachineCameraTarget.transform.localRotation = Quaternion.Euler(_header.cameraPitch, 0f, 0f);
 
-            target.position = Vector3.Lerp(
-                _frames[idx].pos, _frames[idx + 1].pos, frac);
-            target.rotation = Quaternion.Slerp(
-                _frames[idx].rot, _frames[idx + 1].rot, frac);
-
-            yield return null;
+            SetField(PitchField, controller, _header.cameraPitch);
+            SetField(SpeedField, controller, 0f);
+            SetField(RotationVelocityField, controller, 0f);
+            SetField(VerticalVelocityField, controller, -2f);
+            SetField(JumpTimeoutField, controller, controller.JumpTimeout);
+            SetField(FallTimeoutField, controller, controller.FallTimeout);
         }
 
-        IsReplaying = false;
-        onComplete?.Invoke();
-        Debug.Log("[InputReplayer] Replay complete.");
+        if (reenableController)
+            characterController.enabled = true;
+
+        ApplyNeutralInput();
     }
 
-    // ── Data types ────────────────────────────────────────────────────────────
-
-    private struct ReplayFrame
+    private void ApplyFrame(InputFrame frame)
     {
-        public float      t;
-        public Vector3    pos;
-        public Quaternion rot;
+        targetInput.MoveInput(frame.move);
+        targetInput.LookInput(frame.look);
+        targetInput.JumpInput(frame.jump);
+        targetInput.SprintInput(frame.sprint);
+    }
+
+    private void ApplyNeutralInput()
+    {
+        if (targetInput == null)
+            return;
+
+        targetInput.MoveInput(Vector2.zero);
+        targetInput.LookInput(Vector2.zero);
+        targetInput.JumpInput(false);
+        targetInput.SprintInput(false);
+    }
+
+    private void FinishReplay()
+    {
+        EndReplay(true);
+    }
+
+    private void EndReplay(bool invokeCallback)
+    {
+        IsReplaying = false;
+        ApplyNeutralInput();
+        SetLiveInputEnabled(true);
+
+        Action callback = _onComplete;
+        _onComplete = null;
+
+        if (invokeCallback)
+        {
+            callback?.Invoke();
+            Debug.Log("[InputReplayer] Gameplay replay complete.");
+        }
+        else
+        {
+            Debug.Log("[InputReplayer] Gameplay replay stopped.");
+        }
+    }
+
+    private static void SetField(FieldInfo field, object target, object value)
+    {
+        field?.SetValue(target, value);
+    }
+
+    private void SetLiveInputEnabled(bool enabled)
+    {
+#if ENABLE_INPUT_SYSTEM
+        if (!disableLivePlayerInput || _playerInput == null)
+            return;
+
+        if (!enabled)
+        {
+            _restorePlayerInput = _playerInput.enabled;
+            _playerInput.enabled = false;
+        }
+        else if (_restorePlayerInput)
+        {
+            _playerInput.enabled = true;
+            _restorePlayerInput = false;
+        }
+#endif
+    }
+
+    private static string SceneLabel(string scenePath)
+    {
+        return string.IsNullOrEmpty(scenePath)
+            ? "<unsaved scene>"
+            : Path.GetFileNameWithoutExtension(scenePath);
+    }
+
+    private struct RecordingHeader
+    {
+        public string     scenePath;
+        public Vector3    playerPosition;
+        public Quaternion playerRotation;
+        public float      cameraPitch;
+    }
+
+    private struct InputFrame
+    {
+        public float   t;
+        public Vector2 move;
+        public Vector2 look;
+        public bool    jump;
+        public bool    sprint;
     }
 }
