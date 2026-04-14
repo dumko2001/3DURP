@@ -193,6 +193,8 @@ It stores:
 
 New recordings are now saved as timestamped `.bin` files inside `Application.persistentDataPath`, so multiple gameplay paths can be kept and selected later.
 
+Each new gameplay recording session now resets to the captured benchmark start pose before recording begins, so repeated recordings do not continue from the previous end position.
+
 ### `Assets/InputReplayer.cs`
 
 Replays the recorded gameplay input back through the live gameplay controller.
@@ -205,6 +207,14 @@ Instead, it:
 - restores the recorded camera pitch,
 - feeds the recorded input back into `StarterAssetsInputs`,
 - and lets the real first-person controller process it.
+
+### `Assets/GameplayInputResolver.cs`
+
+Small helper used to find the correct active gameplay input target.
+
+This matters because the project can contain multiple `StarterAssetsInputs` instances, inactive prefabs, or temporary objects in the scene. The resolver scores candidates and prefers the active first-person setup with the expected controller components attached.
+
+That reduces the risk of the recorder, replayer, or benchmark UI binding to the wrong player object.
 
 ### `Assets/SharedAssets/Scripts/Runtime/PlayerManager.cs`
 
@@ -246,6 +256,8 @@ Flow:
 This keeps real controller behaviour, including collisions, gravity and input noise.
 
 For on-device recording, gameplay uses the existing mobile touch controls from the first-person controller package, and recording can be stopped with an on-screen `STOP & SAVE` overlay button rather than relying on a hardware keyboard.
+
+The mobile recording controls are the existing move/look touch controls plus jump and sprint buttons. Replay runs themselves do not require manual controls.
 
 ---
 

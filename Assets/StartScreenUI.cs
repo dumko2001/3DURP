@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
+using System.Reflection;
 using Cinemachine;
 using StarterAssets;
 using UnityEngine;
@@ -49,6 +50,18 @@ public class StartScreenUI : MonoBehaviour
     private int                selectedReplayIndex = -1;
     private GameObject         recordingOverlayGO;
     private GameObject         gameplayTouchControlsGO;
+    private bool               gameplayStartPoseCaptured;
+    private Vector3            gameplayStartPosition;
+    private Quaternion         gameplayStartRotation;
+    private float              gameplayStartPitch;
+
+    private const BindingFlags PrivateInstance = BindingFlags.NonPublic | BindingFlags.Instance;
+    private static readonly FieldInfo PitchField = typeof(FirstPersonController).GetField("_cinemachineTargetPitch", PrivateInstance);
+    private static readonly FieldInfo SpeedField = typeof(FirstPersonController).GetField("_speed", PrivateInstance);
+    private static readonly FieldInfo RotationVelocityField = typeof(FirstPersonController).GetField("_rotationVelocity", PrivateInstance);
+    private static readonly FieldInfo VerticalVelocityField = typeof(FirstPersonController).GetField("_verticalVelocity", PrivateInstance);
+    private static readonly FieldInfo JumpTimeoutField = typeof(FirstPersonController).GetField("_jumpTimeoutDelta", PrivateInstance);
+    private static readonly FieldInfo FallTimeoutField = typeof(FirstPersonController).GetField("_fallTimeoutDelta", PrivateInstance);
 
     // Buttons arrays so we can highlight selected one
     private Image[] fpsBtnImages;
@@ -92,6 +105,7 @@ public class StartScreenUI : MonoBehaviour
 
         gameplayInputs = GameplayInputResolver.FindBestInput();
         CacheGameplayInputDefaults(gameplayInputs);
+        CaptureGameplayStartPose(gameplayInputs);
 
         EnsureEventSystem();
         SetMenuInteractionState(true);
@@ -737,6 +751,8 @@ public class StartScreenUI : MonoBehaviour
         if (!BindGameplayRecorderTargets(gameplayRecorder))
             return false;
 
+        RestoreGameplayStartPose();
+
         canvasGO.SetActive(false);
         SetMenuInteractionState(false);
         ShowRecordingOverlay(true);
@@ -797,6 +813,7 @@ public class StartScreenUI : MonoBehaviour
 
         gameplayInputs = GameplayInputResolver.FindBestInput();
         CacheGameplayInputDefaults(gameplayInputs);
+        CaptureGameplayStartPose(gameplayInputs);
         return true;
     }
 
@@ -837,6 +854,7 @@ public class StartScreenUI : MonoBehaviour
 
         gameplayInputs = input;
         CacheGameplayInputDefaults(gameplayInputs);
+        CaptureGameplayStartPose(gameplayInputs);
         return true;
     }
 
@@ -1028,6 +1046,70 @@ public class StartScreenUI : MonoBehaviour
 
         gameplayCursorLockedDefault = input.cursorLocked;
         gameplayCursorLookDefault = input.cursorInputForLook;
+    }
+
+    void CaptureGameplayStartPose(StarterAssetsInputs input)
+    {
+        if (gameplayStartPoseCaptured || input == null)
+            return;
+
+        var controller = input.GetComponent<FirstPersonController>();
+        gameplayStartPosition = input.transform.position;
+        gameplayStartRotation = input.transform.rotation;
+        gameplayStartPitch = CaptureCameraPitch(controller);
+        gameplayStartPoseCaptured = true;
+    }
+
+    void RestoreGameplayStartPose()
+    {
+        if (!gameplayStartPoseCaptured || gameplayInputs == null)
+            return;
+
+        var controller = gameplayInputs.GetComponent<FirstPersonController>();
+        var playerRoot = gameplayInputs.transform;
+        var characterController = controller != null ? controller.GetComponent<CharacterController>() : null;
+        bool reenableController = characterController != null && characterController.enabled;
+
+        if (reenableController)
+            characterController.enabled = false;
+
+        playerRoot.SetPositionAndRotation(gameplayStartPosition, gameplayStartRotation);
+
+        if (controller != null)
+        {
+            if (controller.CinemachineCameraTarget != null)
+                controller.CinemachineCameraTarget.transform.localRotation = Quaternion.Euler(gameplayStartPitch, 0f, 0f);
+
+            SetField(PitchField, controller, gameplayStartPitch);
+            SetField(SpeedField, controller, 0f);
+            SetField(RotationVelocityField, controller, 0f);
+            SetField(VerticalVelocityField, controller, -2f);
+            SetField(JumpTimeoutField, controller, controller.JumpTimeout);
+            SetField(FallTimeoutField, controller, controller.FallTimeout);
+        }
+
+        if (reenableController)
+            characterController.enabled = true;
+
+        gameplayInputs.MoveInput(Vector2.zero);
+        gameplayInputs.LookInput(Vector2.zero);
+        gameplayInputs.JumpInput(false);
+        gameplayInputs.SprintInput(false);
+        gameplayInputs.CrouchInput(false);
+    }
+
+    static float CaptureCameraPitch(FirstPersonController controller)
+    {
+        if (controller == null || controller.CinemachineCameraTarget == null)
+            return 0f;
+
+        float angle = controller.CinemachineCameraTarget.transform.localEulerAngles.x;
+        return angle > 180f ? angle - 360f : angle;
+    }
+
+    static void SetField(FieldInfo field, object target, object value)
+    {
+        field?.SetValue(target, value);
     }
 
     static string BuildReplayPickerLabel(int index, int total, string fileName)
