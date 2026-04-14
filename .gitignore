@@ -6,6 +6,7 @@
 /[Ll]ogs/
 /[Mm]emoryCaptures/
 /[Uu]serSettings/
+.hvigor/
 /[Aa]ssets/AssetStoreTools*
 /Assets/Scenes/
 /Assets/SharedAssets/
@@ -44,6 +45,7 @@ ExportedObj/
 
 # Crashlytics generated file
 crashlytics-build.properties
+mono_crash.*
 
 # OS generated
 .DS_Store
