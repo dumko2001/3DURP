@@ -1,4 +1,6 @@
 using System.Collections;
+using System.Collections.Generic;
+using System.IO;
 using Cinemachine;
 using StarterAssets;
 using UnityEngine;
@@ -29,8 +31,13 @@ public class StartScreenUI : MonoBehaviour
     private Button            runMatrixButton;
     private Button            flythroughModeButton;
     private Button            replayModeButton;
+    private Button            replayPrevButton;
+    private Button            replayNextButton;
+    private Button            stopRecordingButton;
     private Image             flythroughModeImage;
     private Image             replayModeImage;
+    private Text              replayFileText;
+    private Text              recordingOverlayText;
     private bool              isMatrixRunning;
     private BenchmarkRunMode  selectedRunMode = BenchmarkRunMode.CinematicFlythrough;
     private StarterAssetsInputs gameplayInputs;
@@ -38,6 +45,10 @@ public class StartScreenUI : MonoBehaviour
     private bool gameplayCursorLookDefault   = true;
     private InputRecorder      gameplayRecorder;
     private bool               isRecordingGameplayPath;
+    private readonly List<string> replayFilePaths = new();
+    private int                selectedReplayIndex = -1;
+    private GameObject         recordingOverlayGO;
+    private GameObject         gameplayTouchControlsGO;
 
     // Buttons arrays so we can highlight selected one
     private Image[] fpsBtnImages;
@@ -79,16 +90,13 @@ public class StartScreenUI : MonoBehaviour
             Debug.LogWarning("PlayerManager not found — flythrough may not play correctly.");
         }
 
-        gameplayInputs = FindObjectOfType<StarterAssetsInputs>(true);
-        if (gameplayInputs != null)
-        {
-            gameplayCursorLockedDefault = gameplayInputs.cursorLocked;
-            gameplayCursorLookDefault   = gameplayInputs.cursorInputForLook;
-        }
+        gameplayInputs = GameplayInputResolver.FindBestInput();
+        CacheGameplayInputDefaults(gameplayInputs);
 
         EnsureEventSystem();
         SetMenuInteractionState(true);
         BuildUI();
+        SetGameplayTouchControlsVisible(false);
     }
 
     void Update()
@@ -102,7 +110,13 @@ public class StartScreenUI : MonoBehaviour
         isRecordingGameplayPath = false;
         canvasGO.SetActive(true);
         SetMenuInteractionState(true);
-        statusText.text  = "Gameplay input recording saved. Select Gameplay Replay + FPS + VRS, then press START.";
+        ShowRecordingOverlay(false);
+        SetGameplayTouchControlsVisible(false);
+        RefreshReplayFiles(gameplayRecorder.LastSavedPath);
+        string savedName = string.IsNullOrEmpty(gameplayRecorder.LastSavedPath)
+            ? "new recording"
+            : Path.GetFileName(gameplayRecorder.LastSavedPath);
+        statusText.text  = $"Gameplay input recording saved: {savedName}. Select FPS + VRS, then press START.";
         statusText.color = new Color(0.70f, 1f, 0.70f, 1f);
         RefreshModeVisuals();
     }
@@ -152,7 +166,8 @@ public class StartScreenUI : MonoBehaviour
         var allInputs = FindObjectsOfType<StarterAssetsInputs>(true);
         if (allInputs.Length > 0)
         {
-            gameplayInputs = allInputs[0];
+            gameplayInputs = GameplayInputResolver.FindBestInput() ?? allInputs[0];
+            CacheGameplayInputDefaults(gameplayInputs);
             foreach (var input in allInputs)
             {
                 input.cursorLocked       = menuVisible ? false : gameplayCursorLockedDefault;
@@ -163,6 +178,7 @@ public class StartScreenUI : MonoBehaviour
                     input.LookInput(Vector2.zero);
                     input.JumpInput(false);
                     input.SprintInput(false);
+                    input.CrouchInput(false);
                 }
             }
         }
@@ -187,33 +203,33 @@ public class StartScreenUI : MonoBehaviour
         // Semi-transparent background panel — centered
         var panel = MakePanel(canvasGO.transform,
                               new Color(0f, 0f, 0f, 0.82f),
-                              Vector2.zero, new Vector2(760, 700));
+                              Vector2.zero, new Vector2(760, 860));
 
         // Title
         MakeText(panel.transform, "Rendering Config", 38, FontStyle.Bold,
-                 new Vector2(0, 255), new Vector2(720, 55));
+                 new Vector2(0, 305), new Vector2(720, 55));
 
         // ── Mode row ─────────────────────────────────────────────────
         MakeText(panel.transform, "RUN MODE", 15, FontStyle.Normal,
-                 new Vector2(0, 190), new Vector2(720, 28));
+                 new Vector2(0, 240), new Vector2(720, 28));
 
         flythroughModeButton = MakeButton(panel.transform,
                               "CINEMATIC",
-                              new Vector2(-150, 140),
+                              new Vector2(-150, 190),
                               new Vector2(230, 46),
                               () => SetRunMode(BenchmarkRunMode.CinematicFlythrough)).GetComponent<Button>();
         flythroughModeImage = flythroughModeButton.GetComponent<Image>();
 
         replayModeButton = MakeButton(panel.transform,
                           "GAMEPLAY REPLAY",
-                          new Vector2(150, 140),
+                          new Vector2(150, 190),
                           new Vector2(230, 46),
                           () => SetRunMode(BenchmarkRunMode.GameplayReplay)).GetComponent<Button>();
         replayModeImage = replayModeButton.GetComponent<Image>();
 
         // ── FPS row ──────────────────────────────────────────────────
         MakeText(panel.transform, "REFRESH RATE", 15, FontStyle.Normal,
-                 new Vector2(0, 80), new Vector2(720, 28));
+                 new Vector2(0, 105), new Vector2(720, 28));
 
         fpsBtnImages = new Image[fpsOptions.Length];
         for (int i = 0; i < fpsOptions.Length; i++)
@@ -221,7 +237,7 @@ public class StartScreenUI : MonoBehaviour
             int fpsCopy = fpsOptions[i];   // closure-safe copy
             var btn = MakeButton(panel.transform,
                                   fpsCopy + " fps",
-                                  new Vector2(-270 + i * 180, 30),
+                                  new Vector2(-270 + i * 180, 55),
                                   new Vector2(160, 48),
                                   () => OnFPSSelected(fpsCopy));
             fpsBtnImages[i] = btn.GetComponent<Image>();
@@ -229,7 +245,7 @@ public class StartScreenUI : MonoBehaviour
 
         // ── VRS row ──────────────────────────────────────────────────
         MakeText(panel.transform, "SHADING RATE (VRS)", 15, FontStyle.Normal,
-                 new Vector2(0, -35), new Vector2(720, 28));
+                 new Vector2(0, -15), new Vector2(720, 28));
 
         vrsBtnImages = new Image[vrsLabels.Length];
         for (int i = 0; i < vrsLabels.Length; i++)
@@ -238,7 +254,7 @@ public class StartScreenUI : MonoBehaviour
             string labelCopy = vrsLabels[i];
             var btn = MakeButton(panel.transform,
                                   labelCopy,
-                                  new Vector2(-270 + i * 180, -85),
+                                  new Vector2(-270 + i * 180, -65),
                                   new Vector2(160, 48),
                                   () => OnVRSSelected(modeCopy));
             vrsBtnImages[i] = btn.GetComponent<Image>();
@@ -254,18 +270,45 @@ public class StartScreenUI : MonoBehaviour
         statusText.alignment = TextAnchor.MiddleCenter;
         statusText.font      = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
         var srt              = statusGO.GetComponent<RectTransform>();
-        srt.anchoredPosition = new Vector2(0, -150);
+        srt.anchoredPosition = new Vector2(0, -125);
         srt.sizeDelta        = new Vector2(720, 30);
+
+        MakeText(panel.transform, "REPLAY FILE", 15, FontStyle.Normal,
+             new Vector2(0, -165), new Vector2(720, 28));
+
+        replayPrevButton = MakeButton(panel.transform,
+                  "<",
+                  new Vector2(-265, -210),
+                  new Vector2(60, 44),
+                  () => StepReplaySelection(-1)).GetComponent<Button>();
+
+        var replayValuePanel = MakePanel(panel.transform,
+                         new Color(0.08f, 0.08f, 0.08f, 1f),
+                         new Vector2(0, -210),
+                         new Vector2(430, 44));
+        replayFileText = MakeText(replayValuePanel.transform,
+                      "No gameplay recordings found",
+                      14,
+                      FontStyle.Normal,
+                      Vector2.zero,
+                      new Vector2(410, 36));
+        replayFileText.color = new Color(1f, 1f, 1f, 0.6f);
+
+        replayNextButton = MakeButton(panel.transform,
+                  ">",
+                  new Vector2(265, -210),
+                  new Vector2(60, 44),
+                  () => StepReplaySelection(1)).GetComponent<Button>();
 
         // ── START button — disabled until both are selected ───────────
         startButton = MakeButton(panel.transform, "START",
-                     new Vector2(0, -225),
+                 new Vector2(0, -290),
                      new Vector2(220, 58),
                      OnStartClicked,
                      isStart: true).GetComponent<Button>();
 
         recordReplayButton = MakeButton(panel.transform, "RECORD GAMEPLAY PATH",
-                    new Vector2(240, -225),
+                new Vector2(240, -290),
                     new Vector2(250, 58),
                     OnRecordReplayClicked).GetComponent<Button>();
         var recordImage = recordReplayButton.GetComponent<Image>();
@@ -277,7 +320,7 @@ public class StartScreenUI : MonoBehaviour
         recordReplayButton.colors     = recordColors;
 
         runMatrixButton = MakeButton(panel.transform, "RUN ALL 12 REQUIRED",
-                         new Vector2(0, -295),
+                         new Vector2(0, -360),
                          new Vector2(320, 52),
                          OnAutoRunClicked).GetComponent<Button>();
         var matrixImage = runMatrixButton.GetComponent<Image>();
@@ -289,11 +332,51 @@ public class StartScreenUI : MonoBehaviour
         runMatrixButton.colors        = matrixColors;
 
         MakeText(panel.transform,
-                                         "Cinematic uses the timeline path. Gameplay Replay uses gameplay_input_recording.bin. Use RECORD to create/refresh. During record: R toggles stop/save, Esc force-stops, C crouches.",
+                                                      "Cinematic uses the timeline path. Gameplay Replay reuses the selected .bin recording. Use < and > to choose a recording. RECORD saves a new timestamped file. During record: R toggles stop/save, Esc force-stops, Space jumps, C crouches.",
              14, FontStyle.Normal,
-           new Vector2(0, -355), new Vector2(700, 42));
+              new Vector2(0, -420), new Vector2(700, 52));
 
-       SetRunMode(selectedRunMode);
+          RefreshReplayFiles();
+        BuildRecordingOverlay();
+          SetRunMode(selectedRunMode);
+    }
+
+    void BuildRecordingOverlay()
+    {
+        recordingOverlayGO = new GameObject("RecordingOverlayCanvas");
+        var canvas = recordingOverlayGO.AddComponent<Canvas>();
+        canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+        canvas.sortingOrder = 1001;
+
+        var scaler = recordingOverlayGO.AddComponent<CanvasScaler>();
+        scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
+        scaler.referenceResolution = new Vector2(1920, 1080);
+        recordingOverlayGO.AddComponent<GraphicRaycaster>();
+
+        var panel = MakePanel(recordingOverlayGO.transform,
+                              new Color(0f, 0f, 0f, 0.78f),
+                              new Vector2(0f, -24f),
+                              new Vector2(620f, 120f));
+        var panelRect = panel.GetComponent<RectTransform>();
+        panelRect.anchorMin = new Vector2(0.5f, 1f);
+        panelRect.anchorMax = new Vector2(0.5f, 1f);
+        panelRect.pivot = new Vector2(0.5f, 1f);
+
+        recordingOverlayText = MakeText(panel.transform,
+                                        "Recording gameplay path. Use touch controls to move, look, jump and sprint. Press STOP & SAVE when done.",
+                                        16,
+                                        FontStyle.Normal,
+                                        new Vector2(0f, -28f),
+                                        new Vector2(560f, 44f));
+
+        stopRecordingButton = MakeButton(panel.transform,
+                                         "STOP & SAVE",
+                                         new Vector2(0f, -72f),
+                                         new Vector2(220f, 44f),
+                                         OnStopRecordingClicked,
+                                         isStart: true).GetComponent<Button>();
+
+        recordingOverlayGO.SetActive(false);
     }
 
     // ── Selection handlers ───────────────────────────────────────────
@@ -316,6 +399,8 @@ public class StartScreenUI : MonoBehaviour
     void SetRunMode(BenchmarkRunMode mode)
     {
         selectedRunMode = mode;
+        if (selectedRunMode == BenchmarkRunMode.GameplayReplay)
+            RefreshReplayFiles();
         RefreshModeVisuals();
         UpdateStatus();
     }
@@ -327,9 +412,21 @@ public class StartScreenUI : MonoBehaviour
             : "Gameplay Replay";
         string fpsStr = selectedFPS  == -1 ? "?" : selectedFPS + "fps";
         string vrsStr = selectedVRS  == -1 ? "?" : vrsLabels[selectedVRS];
-        statusText.text  = $"Mode: {modeStr}  |  {fpsStr}  |  {vrsStr}";
-        statusText.color = new Color(1f, 1f, 1f,
-                           (selectedFPS != -1 && selectedVRS != -1) ? 1f : 0.6f);
+        if (selectedRunMode == BenchmarkRunMode.GameplayReplay)
+        {
+            string replayLabel = ShortenReplayLabel(GetSelectedReplayFileName());
+            statusText.text = $"Mode: {modeStr}  |  {fpsStr}  |  {vrsStr}  |  Replay: {replayLabel}";
+        }
+        else
+        {
+            statusText.text = $"Mode: {modeStr}  |  {fpsStr}  |  {vrsStr}";
+        }
+
+        bool readyToStart = selectedFPS != -1 && selectedVRS != -1;
+        if (selectedRunMode == BenchmarkRunMode.GameplayReplay)
+            readyToStart &= HasSelectedReplay();
+
+        statusText.color = new Color(1f, 1f, 1f, readyToStart ? 1f : 0.6f);
     }
 
     // ── Start handler ────────────────────────────────────────────────
@@ -382,10 +479,30 @@ public class StartScreenUI : MonoBehaviour
         statusText.color = new Color(1f, 1f, 1f, 0.9f);
     }
 
+    void OnStopRecordingClicked()
+    {
+        if (!isRecordingGameplayPath || gameplayRecorder == null || !gameplayRecorder.IsRecording)
+            return;
+
+        gameplayRecorder.StopRecording();
+    }
+
+    void StepReplaySelection(int direction)
+    {
+        if (replayFilePaths.Count == 0)
+            return;
+
+        selectedReplayIndex = (selectedReplayIndex + direction + replayFilePaths.Count) % replayFilePaths.Count;
+        RefreshReplayPicker();
+        UpdateStatus();
+    }
+
     void OnSingleRunComplete()
     {
         canvasGO.SetActive(true);
         SetMenuInteractionState(true);
+        ShowRecordingOverlay(false);
+        SetGameplayTouchControlsVisible(false);
 
         string modeLabel = selectedRunMode == BenchmarkRunMode.GameplayReplay
             ? "Gameplay replay"
@@ -493,6 +610,8 @@ public class StartScreenUI : MonoBehaviour
         // Hide UI
         canvasGO.SetActive(false);
         SetMenuInteractionState(false);
+        ShowRecordingOverlay(false);
+        SetGameplayTouchControlsVisible(false);
 
         // Lock cursor so accidental mouse movement cannot trigger PlayerManager's
         // NotifyPlayerMoved() → EnableFirstPersonController() → director.SetActive(false)
@@ -542,14 +661,21 @@ public class StartScreenUI : MonoBehaviour
         Application.targetFrameRate = fps;
         vrsRendererCount = ApplyVRS(vrsMode);
 
+        string replayPath = GetSelectedReplayPath();
+        if (string.IsNullOrEmpty(replayPath))
+        {
+            RefreshReplayFiles();
+            statusText.text  = "No gameplay recording selected. Press RECORD first, then choose the saved file.";
+            statusText.color = new Color(1f, 0.82f, 0.40f, 1f);
+            return false;
+        }
+
         var replayer = gameObject.GetComponent<InputReplayer>()
                        ?? gameObject.AddComponent<InputReplayer>();
-        if (!replayer.Load())
+        if (!replayer.Load(replayPath))
         {
-            if (TryStartGameplayRecordingSession())
-                return false;
-
-            statusText.text  = "Gameplay replay file not found and recorder could not start.";
+            RefreshReplayFiles();
+            statusText.text  = "Selected gameplay replay could not be loaded. Re-record or choose another file.";
             statusText.color = new Color(1f, 0.4f, 0.4f, 1f);
             return false;
         }
@@ -557,8 +683,13 @@ public class StartScreenUI : MonoBehaviour
         if (!PrepareGameplayReplayMode())
             return false;
 
+        if (!BindGameplayReplayTargets(replayer))
+            return false;
+
         canvasGO.SetActive(false);
         SetMenuInteractionState(false);
+        ShowRecordingOverlay(false);
+        SetGameplayTouchControlsVisible(false);
 
         var logger = gameObject.GetComponent<FlythroughController>()
                      ?? gameObject.AddComponent<FlythroughController>();
@@ -598,20 +729,29 @@ public class StartScreenUI : MonoBehaviour
                          ?? gameObject.AddComponent<InputRecorder>();
         gameplayRecorder.autoStartOnPlay = false;
         gameplayRecorder.toggleKey = KeyCode.R;
+        gameplayRecorder.useTimestampedFileNames = true;
 
         if (!PrepareGameplayReplayMode())
             return false;
 
+        if (!BindGameplayRecorderTargets(gameplayRecorder))
+            return false;
+
         canvasGO.SetActive(false);
         SetMenuInteractionState(false);
+        ShowRecordingOverlay(true);
+        SetGameplayTouchControlsVisible(true);
         gameplayRecorder.StartRecording();
 
         if (!gameplayRecorder.IsRecording)
+        {
+            ShowRecordingOverlay(false);
+            SetGameplayTouchControlsVisible(false);
             return false;
+        }
 
         isRecordingGameplayPath = true;
-        string savePath = InputRecorder.DefaultSavePath;
-        Debug.Log($"[START] Replay recording missing. Recording gameplay input now to: {savePath}");
+    Debug.Log("[START] Recording gameplay input to a new timestamped replay file.");
         Debug.Log("[START] Play normally. Press R again to stop and save, or Esc to force-stop. The benchmark menu will return automatically.");
 
         if (statusText != null)
@@ -619,6 +759,9 @@ public class StartScreenUI : MonoBehaviour
             statusText.text  = "Recording gameplay path. Press R again to stop and save, or Esc to force-stop.";
             statusText.color = new Color(1f, 1f, 1f, 0.9f);
         }
+
+        if (recordingOverlayText != null)
+            recordingOverlayText.text = "Recording gameplay path. Use touch controls to move, look, jump and sprint. Press STOP & SAVE when done.";
         return true;
     }
 
@@ -651,6 +794,49 @@ public class StartScreenUI : MonoBehaviour
 
         playerManager.EnableFirstPersonController();
         playerManager.enabled = false;
+
+        gameplayInputs = GameplayInputResolver.FindBestInput();
+        CacheGameplayInputDefaults(gameplayInputs);
+        return true;
+    }
+
+    bool BindGameplayRecorderTargets(InputRecorder recorder)
+    {
+        if (!TryResolveGameplayRuntime(out var input, out var controller))
+            return false;
+
+        recorder.inputSource = input;
+        recorder.playerRoot = input.transform;
+        recorder.controller = controller;
+        return true;
+    }
+
+    bool BindGameplayReplayTargets(InputReplayer replayer)
+    {
+        if (!TryResolveGameplayRuntime(out var input, out var controller))
+            return false;
+
+        replayer.targetInput = input;
+        replayer.playerRoot = input.transform;
+        replayer.controller = controller;
+        return true;
+    }
+
+    bool TryResolveGameplayRuntime(out StarterAssetsInputs input, out FirstPersonController controller)
+    {
+        input = GameplayInputResolver.FindBestInput();
+        controller = input != null ? input.GetComponent<FirstPersonController>() : null;
+
+        if (input == null || controller == null)
+        {
+            statusText.text  = "Gameplay controller not found — cannot start replay or recording.";
+            statusText.color = new Color(1f, 0.4f, 0.4f, 1f);
+            Debug.LogError("[START] Active gameplay controller not found.");
+            return false;
+        }
+
+        gameplayInputs = input;
+        CacheGameplayInputDefaults(gameplayInputs);
         return true;
     }
 
@@ -690,6 +876,8 @@ public class StartScreenUI : MonoBehaviour
             flythroughModeButton.interactable = interactable;
         if (replayModeButton != null)
             replayModeButton.interactable = interactable;
+
+        RefreshReplayPicker();
     }
 
     void RefreshSelectionVisuals()
@@ -720,6 +908,8 @@ public class StartScreenUI : MonoBehaviour
 
         if (recordReplayButton != null)
             recordReplayButton.interactable = !isMatrixRunning && selectedRunMode == BenchmarkRunMode.GameplayReplay;
+
+        RefreshReplayPicker();
     }
 
     string BuildMatrixCsvName(int fps, int vrsMode)
@@ -729,7 +919,139 @@ public class StartScreenUI : MonoBehaviour
 
     string BuildReplayCsvName(int fps, int vrsMode)
     {
-        return $"benchmark_results_replay_{fps}fps_{vrsLabels[vrsMode].Replace(" ", string.Empty)}.csv";
+        string replayLabel = SanitizeFileSegment(Path.GetFileNameWithoutExtension(GetSelectedReplayFileName()));
+        if (string.IsNullOrEmpty(replayLabel))
+            replayLabel = "replay";
+
+        return $"benchmark_results_replay_{replayLabel}_{fps}fps_{vrsLabels[vrsMode].Replace(" ", string.Empty)}.csv";
+    }
+
+    void RefreshReplayFiles(string preferredPath = null)
+    {
+        string selectedPath = string.IsNullOrEmpty(preferredPath)
+            ? GetSelectedReplayPath()
+            : preferredPath;
+
+        replayFilePaths.Clear();
+        if (Directory.Exists(Application.persistentDataPath))
+        {
+            foreach (var path in Directory.GetFiles(Application.persistentDataPath, "gameplay_input*.bin"))
+                replayFilePaths.Add(path);
+
+            replayFilePaths.Sort((left, right) =>
+                File.GetLastWriteTimeUtc(right).CompareTo(File.GetLastWriteTimeUtc(left)));
+        }
+
+        if (replayFilePaths.Count == 0)
+        {
+            selectedReplayIndex = -1;
+        }
+        else if (!string.IsNullOrEmpty(selectedPath))
+        {
+            selectedReplayIndex = replayFilePaths.FindIndex(path => string.Equals(path, selectedPath));
+            if (selectedReplayIndex < 0)
+                selectedReplayIndex = 0;
+        }
+        else if (selectedReplayIndex < 0 || selectedReplayIndex >= replayFilePaths.Count)
+        {
+            selectedReplayIndex = 0;
+        }
+
+        RefreshReplayPicker();
+    }
+
+    void RefreshReplayPicker()
+    {
+        if (replayFileText != null)
+        {
+            bool hasReplay = HasSelectedReplay();
+            replayFileText.text = hasReplay
+                ? BuildReplayPickerLabel(selectedReplayIndex, replayFilePaths.Count, Path.GetFileName(replayFilePaths[selectedReplayIndex]))
+                : "No gameplay recordings found in persistentDataPath";
+            replayFileText.color = hasReplay ? Color.white : new Color(1f, 1f, 1f, 0.6f);
+        }
+
+        bool canSelect = !isMatrixRunning && selectedRunMode == BenchmarkRunMode.GameplayReplay;
+        if (replayPrevButton != null)
+            replayPrevButton.interactable = canSelect && replayFilePaths.Count > 1;
+        if (replayNextButton != null)
+            replayNextButton.interactable = canSelect && replayFilePaths.Count > 1;
+    }
+
+    void ShowRecordingOverlay(bool visible)
+    {
+        if (recordingOverlayGO != null)
+            recordingOverlayGO.SetActive(visible);
+    }
+
+    void SetGameplayTouchControlsVisible(bool visible)
+    {
+        gameplayTouchControlsGO ??= ResolveGameplayTouchControlsRoot();
+        if (gameplayTouchControlsGO != null)
+            gameplayTouchControlsGO.SetActive(visible);
+    }
+
+    GameObject ResolveGameplayTouchControlsRoot()
+    {
+        var uiCanvases = FindObjectsOfType<UICanvasControllerInput>(true);
+        if (uiCanvases.Length == 0)
+            return null;
+
+        foreach (var uiCanvas in uiCanvases)
+        {
+            if (gameplayInputs != null && uiCanvas.starterAssetsInputs == gameplayInputs)
+                return uiCanvas.gameObject;
+        }
+
+        return uiCanvases[0].gameObject;
+    }
+
+    bool HasSelectedReplay()
+    {
+        return selectedReplayIndex >= 0 && selectedReplayIndex < replayFilePaths.Count;
+    }
+
+    string GetSelectedReplayPath()
+    {
+        return HasSelectedReplay() ? replayFilePaths[selectedReplayIndex] : null;
+    }
+
+    string GetSelectedReplayFileName()
+    {
+        return HasSelectedReplay() ? Path.GetFileName(replayFilePaths[selectedReplayIndex]) : "None";
+    }
+
+    void CacheGameplayInputDefaults(StarterAssetsInputs input)
+    {
+        if (input == null)
+            return;
+
+        gameplayCursorLockedDefault = input.cursorLocked;
+        gameplayCursorLookDefault = input.cursorInputForLook;
+    }
+
+    static string BuildReplayPickerLabel(int index, int total, string fileName)
+    {
+        return total <= 1 ? fileName : $"{index + 1}/{total}  {fileName}";
+    }
+
+    static string ShortenReplayLabel(string fileName)
+    {
+        if (string.IsNullOrEmpty(fileName) || fileName == "None")
+            return "None";
+
+        return fileName.Length <= 36 ? fileName : fileName.Substring(0, 33) + "...";
+    }
+
+    static string SanitizeFileSegment(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return string.Empty;
+
+        foreach (char invalidChar in Path.GetInvalidFileNameChars())
+            value = value.Replace(invalidChar, '_');
+
+        return value.Replace(' ', '_');
     }
 
     // Returns the number of scene renderers that received the VRS rate.
@@ -808,7 +1130,7 @@ public class StartScreenUI : MonoBehaviour
         return go;
     }
 
-    void MakeText(Transform parent, string txt, int size, FontStyle style,
+    Text MakeText(Transform parent, string txt, int size, FontStyle style,
                   Vector2 pos, Vector2 sizeDelta)
     {
         var go = new GameObject(txt);
@@ -823,6 +1145,7 @@ public class StartScreenUI : MonoBehaviour
         var rt = go.GetComponent<RectTransform>();
         rt.anchoredPosition = pos;
         rt.sizeDelta        = sizeDelta;
+        return t;
     }
 
     GameObject MakeButton(Transform parent, string label, Vector2 pos, Vector2 size,

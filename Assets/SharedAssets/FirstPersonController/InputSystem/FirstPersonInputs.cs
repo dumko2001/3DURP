@@ -30,6 +30,7 @@ namespace StarterAssets
 		private static bool m_FocusActionsSetUp;
 
 		private bool m_CrouchKeyHeld;
+		private bool m_ExternalInputOverride;
 
 		private void Start()
 		{
@@ -61,6 +62,9 @@ namespace StarterAssets
 		private void Update()
 		{
 #if ENABLE_INPUT_SYSTEM
+			if (m_ExternalInputOverride)
+				return;
+
 			if (Keyboard.current != null)
 				m_CrouchKeyHeld = Keyboard.current.cKey.isPressed;
 			CrouchInput(m_CrouchKeyHeld);
@@ -71,6 +75,9 @@ namespace StarterAssets
 #if ENABLE_INPUT_SYSTEM
 		public void OnMove(InputValue value)
 		{
+			if (m_ExternalInputOverride)
+				return;
+
 			if (m_IgnoreInput)
 			{
 				MoveInput(Vector2.zero);
@@ -86,6 +93,9 @@ namespace StarterAssets
 
 		public void OnLook(InputValue value)
 		{
+			if (m_ExternalInputOverride)
+				return;
+
 			if (m_IgnoreInput)
 			{
 				LookInput(Vector2.zero);
@@ -104,6 +114,9 @@ namespace StarterAssets
 
 		public void OnJump(InputValue value)
 		{
+			if (m_ExternalInputOverride)
+				return;
+
 			if (CameraManager != null)
 			{
 				CameraManager.NotifyPlayerMoved();
@@ -113,6 +126,9 @@ namespace StarterAssets
 
 		public void OnSprint(InputValue value)
 		{
+			if (m_ExternalInputOverride)
+				return;
+
 			if (CameraManager != null)
 			{
 				CameraManager.NotifyPlayerMoved();
@@ -122,6 +138,9 @@ namespace StarterAssets
 
 		public void OnCrouch(InputValue value)
 		{
+			if (m_ExternalInputOverride)
+				return;
+
 			if (CameraManager != null)
 			{
 				CameraManager.NotifyPlayerMoved();
@@ -156,6 +175,15 @@ namespace StarterAssets
 		public void CrouchInput(bool newCrouchState)
 		{
 			crouch = newCrouchState;
+		}
+
+		public void SetExternalInputOverride(bool active)
+		{
+			m_ExternalInputOverride = active;
+			if (!active)
+				return;
+
+			m_CrouchKeyHeld = false;
 		}
 		
 		private void OnApplicationFocus(bool hasFocus)

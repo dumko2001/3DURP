@@ -17,6 +17,7 @@
 //   hdc file recv /data/storage/el2/base/files/gameplay_input_recording.bin ./gameplay_input_recording.bin
 
 using System.Collections.Generic;
+using System;
 using System.IO;
 using StarterAssets;
 using UnityEngine;
@@ -46,7 +47,12 @@ public class InputRecorder : MonoBehaviour
     [Tooltip("Automatically start recording when Play mode begins.")]
     public bool autoStartOnPlay;
 
+    [Tooltip("Save new recordings as timestamped files so multiple gameplay paths can be kept.")]
+    public bool useTimestampedFileNames = true;
+
     public bool IsRecording { get; private set; }
+
+    public string LastSavedPath { get; private set; }
 
     public static string DefaultSavePath =>
         Path.Combine(Application.persistentDataPath, "gameplay_input_recording.bin");
@@ -118,7 +124,10 @@ public class InputRecorder : MonoBehaviour
         Debug.Log($"[InputRecorder] Recording gameplay input in {SceneLabel(_header.scenePath)} — press {toggleKey} (or {stopKey}) to stop.");
     }
 
-    public void StopRecording() => StopRecording(DefaultSavePath);
+    public void StopRecording()
+    {
+        StopRecording(useTimestampedFileNames ? BuildTimestampedSavePath(_header.scenePath) : DefaultSavePath);
+    }
 
     public void StopRecording(string path)
     {
@@ -130,6 +139,7 @@ public class InputRecorder : MonoBehaviour
 
         IsRecording = false;
         WriteBinary(path);
+    LastSavedPath = path;
 
         float duration = _frames.Count > 0 ? _frames[_frames.Count - 1].t : 0f;
         Debug.Log($"[InputRecorder] Saved {_frames.Count} gameplay frames ({duration:F1}s) → {path}");
@@ -163,14 +173,23 @@ public class InputRecorder : MonoBehaviour
 
     private void ResolveReferences()
     {
-        if (inputSource == null)
-            inputSource = FindObjectOfType<StarterAssetsInputs>(true);
+        if (inputSource == null || playerRoot == null || controller == null)
+        {
+            if (GameplayInputResolver.TryResolve(out var resolvedInput, out var resolvedRoot, out var resolvedController))
+            {
+                inputSource ??= resolvedInput;
+                playerRoot ??= resolvedRoot;
+                controller ??= resolvedController;
+            }
+        }
+    }
 
-        if (playerRoot == null && inputSource != null)
-            playerRoot = inputSource.transform;
-
-        if (controller == null && inputSource != null)
-            controller = inputSource.GetComponent<FirstPersonController>();
+    public static string BuildTimestampedSavePath(string scenePath)
+    {
+        string sceneLabel = SanitizeFileName(SceneLabel(scenePath));
+        string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+        string fileName = $"gameplay_input_{sceneLabel}_{timestamp}.bin";
+        return Path.Combine(Application.persistentDataPath, fileName);
     }
 
     private float CaptureCameraPitch()
@@ -225,6 +244,17 @@ public class InputRecorder : MonoBehaviour
         return string.IsNullOrEmpty(scenePath)
             ? "<unsaved scene>"
             : Path.GetFileNameWithoutExtension(scenePath);
+    }
+
+    private static string SanitizeFileName(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return "scene";
+
+        foreach (char invalidChar in Path.GetInvalidFileNameChars())
+            value = value.Replace(invalidChar, '_');
+
+        return value.Replace(' ', '_');
     }
 
     private struct RecordingHeader

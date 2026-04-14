@@ -59,6 +59,9 @@ public class InputReplayer : MonoBehaviour
     private int _frameIndex;
     private float _startTime;
     private Action _onComplete;
+    private Vector2 _currentMove;
+    private bool _currentSprint;
+    private bool _currentCrouch;
 
 #if ENABLE_INPUT_SYSTEM
     private PlayerInput _playerInput;
@@ -87,12 +90,23 @@ public class InputReplayer : MonoBehaviour
             return;
 
         float elapsed = Time.realtimeSinceStartup - _startTime;
-        while (_frameIndex < _frames.Length - 1 && _frames[_frameIndex + 1].t <= elapsed)
+        Vector2 lookDelta = Vector2.zero;
+        bool jumpPressed = false;
+
+        while (_frameIndex + 1 < _frames.Length && _frames[_frameIndex + 1].t <= elapsed)
+        {
             _frameIndex++;
+            var frame = _frames[_frameIndex];
+            _currentMove = frame.move;
+            _currentSprint = frame.sprint;
+            _currentCrouch = frame.crouch;
+            lookDelta += frame.look;
+            jumpPressed |= frame.jump;
+        }
 
-        ApplyFrame(_frames[_frameIndex]);
+        ApplyReplayState(lookDelta, jumpPressed);
 
-        if (elapsed >= _frames[_frames.Length - 1].t)
+        if (_frameIndex >= _frames.Length - 1 && elapsed >= _frames[_frames.Length - 1].t)
             FinishReplay();
     }
 
@@ -190,12 +204,14 @@ public class InputReplayer : MonoBehaviour
         SetLiveInputEnabled(false);
         ResetToRecordedStart();
 
-        _frameIndex  = 0;
+        _frameIndex  = -1;
         _startTime   = Time.realtimeSinceStartup;
         _onComplete  = onComplete;
         IsReplaying  = true;
+        _currentMove = Vector2.zero;
+        _currentSprint = false;
+        _currentCrouch = false;
 
-        ApplyFrame(_frames[0]);
         Debug.Log($"[InputReplayer] Replaying gameplay input in {SceneLabel(_header.scenePath)}.");
         return true;
     }
@@ -210,14 +226,15 @@ public class InputReplayer : MonoBehaviour
 
     private void ResolveReferences()
     {
-        if (targetInput == null)
-            targetInput = FindObjectOfType<StarterAssetsInputs>(true);
-
-        if (playerRoot == null && targetInput != null)
-            playerRoot = targetInput.transform;
-
-        if (controller == null && targetInput != null)
-            controller = targetInput.GetComponent<FirstPersonController>();
+        if (targetInput == null || playerRoot == null || controller == null)
+        {
+            if (GameplayInputResolver.TryResolve(out var resolvedInput, out var resolvedRoot, out var resolvedController))
+            {
+                targetInput ??= resolvedInput;
+                playerRoot ??= resolvedRoot;
+                controller ??= resolvedController;
+            }
+        }
 
 #if ENABLE_INPUT_SYSTEM
         if (_playerInput == null && targetInput != null)
@@ -262,13 +279,16 @@ public class InputReplayer : MonoBehaviour
         ApplyNeutralInput();
     }
 
-    private void ApplyFrame(InputFrame frame)
+    private void ApplyReplayState(Vector2 lookDelta, bool jumpPressed)
     {
-        targetInput.MoveInput(frame.move);
-        targetInput.LookInput(frame.look);
-        targetInput.JumpInput(frame.jump);
-        targetInput.SprintInput(frame.sprint);
-        targetInput.CrouchInput(frame.crouch);
+        if (targetInput == null)
+            return;
+
+        targetInput.MoveInput(_currentMove);
+        targetInput.LookInput(lookDelta);
+        targetInput.JumpInput(jumpPressed);
+        targetInput.SprintInput(_currentSprint);
+        targetInput.CrouchInput(_currentCrouch);
     }
 
     private void ApplyNeutralInput()
@@ -315,6 +335,9 @@ public class InputReplayer : MonoBehaviour
 
     private void SetLiveInputEnabled(bool enabled)
     {
+        if (targetInput != null)
+            targetInput.SetExternalInputOverride(!enabled);
+
 #if ENABLE_INPUT_SYSTEM
         if (!disableLivePlayerInput || _playerInput == null)
             return;

@@ -1,110 +1,105 @@
-# Huawei Rendering Benchmark — Technical Approach and Current Status
+# Huawei Rendering Benchmark — Client Summary
 
-## Purpose of This Document
+## Purpose
 
-This note explains, at both a high level and a technical level, how the Unity benchmark project has been implemented against the Statement of Work dated 8 April 2026, why specific design choices were made, what files were added or changed, how Variable Rate Shading (VRS) is applied, and what has and has not been verified yet.
-
-It is intended to be shareable with the client.
+This note explains what has been built for the Unity rendering benchmark, how it maps to the Statement of Work dated 8 April 2026, why the current technical approach was chosen, and what has and has not been verified yet.
 
 ---
 
-## Executive Summary
+## Summary
 
-The implementation now supports two benchmark modes in the Oasis Unity scene:
+The project now supports two benchmark modes in the Oasis Unity scene:
 
 1. **Cinematic mode**
-   This is the original SOW-aligned mode. It runs a fixed one-minute camera route using the same animation every time, with 10 seconds of static camera and 50 seconds of motion at varying speeds. This mode exists to satisfy the Phase 1 requirement for a repeatable, comparable measurement path.
+   A fixed one-minute benchmark route designed to satisfy the original Phase 1 SOW requirement for repeatable measurements under the same camera animation.
 
 2. **Gameplay Replay mode**
-   This was added after later discussion to better represent real gameplay. Instead of moving the camera by a fixed Timeline path, it records real user gameplay input and replays that input back through the live first-person controller. This preserves controller integration, gravity, collisions, camera noise, and path variation.
+   A separate mode added after later discussion to better represent real gameplay. This records real player input and replays it through the live first-person controller rather than moving the camera along a fixed path.
 
-The result is a benchmark harness that supports both:
+The reason both modes are kept is simple:
 
-- a **controlled repeatability mode** for strict comparison, and
-- a **real gameplay mode** for more realistic performance behaviour.
+- **Cinematic mode** is best for controlled, low-noise comparison.
+- **Gameplay Replay mode** is best for realistic gameplay behaviour.
 
-This split is intentional. These two modes answer different questions.
+They answer different questions, so it is stronger to support both than to force one method to do both jobs.
 
 ---
 
-## Alignment With the SOW
+## SOW Alignment
 
-### Phase 1 requirement: fixed one-minute camera path
+### Phase 1
 
-The SOW explicitly requires:
+The original Phase 1 requirements were:
 
-- a reasonably complex Unity demo project,
-- a fixed camera walk-through path so the same animation can be replayed under different rendering configurations,
-- one minute total duration,
-- 10 seconds static camera,
-- 50 seconds camera motion at different speeds,
-- refresh-rate limiting at 120, 60, 40 and 30 fps,
-- hardware VRS modes 1x2, 2x2 and 4x4,
-- and a start screen with buttons to activate the options.
+- use a reasonably complex Unity demo,
+- create a fixed walk-through path that can be rerun under different rendering settings,
+- make that path one minute long,
+- include 10 seconds of static camera and 50 seconds of motion at different speeds,
+- support frame-rate limits of 120, 60, 40 and 30 fps,
+- support hardware VRS modes 1x2, 2x2 and 4x4,
+- and provide a start screen to choose the options.
 
-This requirement is met by the **Cinematic mode** implementation.
+This is satisfied by the current **Cinematic mode** implementation.
 
-### Later discussion: real gameplay rather than only a fixed camera
+### Later client direction
 
-In later discussion, the preference shifted toward observing behaviour closer to real gameplay rather than only a fixed cinematic route. That is a valid requirement, but it is not exactly the same measurement problem as the original Phase 1 SOW.
+Later discussion introduced a second goal: measure behaviour closer to real gameplay, not only a fixed cinematic route. That is a valid extension, but it is not identical to the original SOW benchmark problem.
 
-For that reason, the project now keeps the original cinematic route and adds a separate **Gameplay Replay mode** rather than replacing the original approach.
+For that reason, the project now supports **Gameplay Replay mode** in addition to the original fixed camera route, rather than replacing it.
 
-That means:
+### Phase 2
 
-- the project still satisfies the original fixed-animation requirement, and
-- it also supports a more realistic, controller-driven measurement mode.
+The project already logs benchmark rows every 100 ms and includes a simple throttling indicator. However, the following are **not yet collected by the Unity codebase**:
 
-### Phase 2 requirement: 100 ms statistics and throttling awareness
+- total device power draw,
+- current device power draw,
+- GPU utilisation,
+- CPU utilisation.
 
-The current implementation already logs benchmark rows every 100 ms and flags likely throttling based on frame-rate collapse relative to the chosen target. However, **device power draw, GPU utilisation and CPU utilisation are not currently collected by this Unity codebase**. Those remain Phase 2 items and likely require Huawei-specific tooling or private APIs.
+Those remain Phase 2 items and likely require Huawei tooling, DevEco profiling, or private APIs.
 
-### Phase 3 requirement
+### Phase 3
 
-Phase 3 is explicitly outside this SOW. It is not part of the Unity implementation here.
+Phase 3 is outside the Unity implementation covered here.
 
 ---
 
 ## Why This Architecture Was Chosen
 
-### Why the fixed cinematic route was chosen first
+### Why the fixed cinematic route exists
 
-The first implementation was based on a fixed Timeline route because the SOW asked for the same animation to be replayed under different rendering settings. A fixed Timeline route is the most direct way to satisfy that requirement.
+The SOW asked for the same animation to be rerun under different rendering settings. A Timeline-based route is the most direct and defensible way to do that.
 
-Benefits of the cinematic route:
+Benefits:
 
-- identical camera path on every run,
-- identical scene visibility pattern on every run,
-- clean comparison between rendering settings,
-- straightforward one-minute schedule,
-- and easy explanation to the client.
+- identical camera path each run,
+- identical scene visibility pattern each run,
+- lower measurement noise,
+- straightforward SOW traceability.
 
-### Why gameplay replay was then added
+### Why gameplay replay was added
 
-A fixed camera route is good for controlled comparison, but it does not fully represent the variability of real player motion. In real gameplay, the engine is affected by:
+A fixed camera route is useful for controlled comparison, but it does not reflect live gameplay behaviour. Real gameplay includes:
 
-- player input noise,
-- camera jitter,
-- collisions,
+- input noise,
+- collision response,
 - gravity,
-- controller acceleration and rotation,
-- route drift,
-- and the timing behaviour of the live gameplay stack.
+- controller acceleration,
+- camera jitter,
+- and frame-rate-sensitive route variation.
 
-Because later discussion indicated that this realism matters, gameplay replay was added as a separate mode.
+Because that realism matters for the client’s later requirement, gameplay replay was added as a separate mode.
 
-### Why gameplay replay uses recorded controller input instead of direct transform motion
+### Why gameplay replay uses input replay instead of transform playback
 
-An earlier experimental approach used direct transform playback. That was rejected as the final gameplay method because it bypassed the real first-person controller.
+The final design records and replays the same input state used by the live controller:
 
-The final gameplay replay design instead records and replays the same input state consumed by the live controller:
-
-- movement,
+- move,
 - look,
 - jump,
 - sprint.
 
-This means the run still passes through:
+This means the replay still passes through:
 
 - `StarterAssetsInputs`,
 - `FirstPersonController`,
@@ -112,291 +107,205 @@ This means the run still passes through:
 - gravity and grounded logic,
 - and the real camera logic.
 
-This is the correct choice if the goal is to measure performance under gameplay-like conditions rather than only under a fixed pre-authored shot.
-
-### Why both modes are kept
-
-The two modes serve different purposes:
-
-- **Cinematic mode** is better for strict, low-noise comparison and SOW traceability.
-- **Gameplay Replay mode** is better for realism and client-facing gameplay behaviour.
-
-Keeping both is stronger than choosing only one.
+That is the correct design if the goal is gameplay realism. Direct transform playback was not kept as the final gameplay method because it would bypass too much of the real controller stack.
 
 ---
 
-## Current File-Level Design
+## What Has Been Implemented
+
+### 1. Fixed cinematic benchmark path
+
+A one-minute route with:
+
+- 10 seconds static camera,
+- 50 seconds motion,
+- varying speed phases,
+- and repeatable execution.
+
+### 2. Start-screen benchmark UI
+
+The in-app start screen lets the user choose:
+
+- run mode,
+- frame-rate cap,
+- VRS mode,
+- gameplay replay file,
+- and benchmark start.
+
+### 3. 12-case cinematic matrix runner
+
+The original matrix runner remains in place for the fixed-animation benchmark.
+
+### 4. Shared FPS/VRS overlay and CSV logging
+
+Both modes use the same on-screen overlay and the same CSV logging path.
+
+### 5. Gameplay input recorder and replayer
+
+The project now supports recording Oasis gameplay input and replaying it back through the live first-person controller.
+
+---
+
+## Key Files and Their Roles
 
 ### `Assets/StartScreenUI.cs`
 
-This is the main benchmark harness.
+Main benchmark launcher.
 
-It is responsible for:
+Responsibilities:
 
-- finding `PlayerManager`,
-- building the entire benchmark UI in code,
-- applying frame-rate caps,
-- applying VRS modes,
-- selecting between Cinematic and Gameplay Replay modes,
-- starting the fixed flythrough path,
-- starting gameplay replay runs,
-- and running the 12-case cinematic matrix.
+- find `PlayerManager`,
+- build the benchmark UI in code,
+- apply frame-rate caps,
+- apply VRS modes,
+- switch between Cinematic and Gameplay Replay modes,
+- list and select available gameplay replay files,
+- launch the fixed flythrough,
+- launch gameplay replay runs,
+- run the 12-case cinematic matrix.
 
-Important design points:
+Important point:
 
-- **Cinematic is still the default mode.** This preserves the original benchmark behaviour.
-- **Gameplay Replay is a separate selectable mode.**
-- **The 12-case matrix remains cinematic-only.** This was intentional, because the original matrix requirement is the fixed-animation case.
-- **Replay mode loads a previously recorded gameplay input file and starts the run through the live first-person controller path.**
+- **Cinematic mode remains the default**, so the original benchmark behaviour is preserved.
 
 ### `Assets/FlythroughController.cs`
 
-This file started as a Timeline speed-schedule controller and on-screen FPS overlay.
+Shared benchmark runtime.
 
-It now has a dual role:
+Responsibilities:
 
-- in Cinematic mode, it still drives the Timeline speed schedule,
-- in both Cinematic and Gameplay Replay modes, it acts as the shared on-screen measurement and CSV logging component.
-
-This refactoring was chosen so that:
-
-- the same FPS/VRS overlay is used in both modes,
-- the same CSV cadence is used in both modes,
-- and logging logic is not duplicated in multiple scripts.
+- drive the cinematic speed schedule in Cinematic mode,
+- show live FPS/VRS overlay,
+- write benchmark CSV rows every 100 ms,
+- support both Cinematic and Gameplay Replay logging paths.
 
 ### `Assets/InputRecorder.cs`
 
-This records real gameplay input from the Oasis first-person controller stack.
+Records Oasis gameplay input.
 
-It records:
+It stores:
 
-- current scene path,
+- scene path,
 - player start position,
 - player start rotation,
 - starting camera pitch,
-- and per-frame gameplay input state:
-  - move,
-  - look,
-  - jump,
-  - sprint.
+- per-frame move/look/jump/sprint input state.
 
-This is written to `gameplay_input_recording.bin` inside `Application.persistentDataPath`.
+New recordings are now saved as timestamped `.bin` files inside `Application.persistentDataPath`, so multiple gameplay paths can be kept and selected later.
 
 ### `Assets/InputReplayer.cs`
 
-This replays the recorded gameplay input back through the real gameplay controller.
+Replays the recorded gameplay input back through the live gameplay controller.
 
 It does **not** move the transform directly.
 
 Instead, it:
 
-- resets the player to the recorded start pose,
+- restores the recorded start pose,
 - restores the recorded camera pitch,
-- optionally disables live `PlayerInput` during the run,
-- and feeds recorded input back into `StarterAssetsInputs`.
-
-This preserves real controller behaviour and is the main reason this mode is suitable for gameplay-like testing.
+- feeds the recorded input back into `StarterAssetsInputs`,
+- and lets the real first-person controller process it.
 
 ### `Assets/SharedAssets/Scripts/Runtime/PlayerManager.cs`
 
-This is an existing runtime script from the project. It manages transitions between the flythrough state and first-person control.
+Existing project script used to switch between flythrough mode and first-person mode.
 
-This is relevant because:
+This matters because:
 
-- Cinematic mode depends on `EnableFlythrough()`, and
-- Gameplay Replay mode depends on switching back into first-person control via `EnableFirstPersonController()`.
-
-### `README.md`
-
-The README documents project setup and the baseline benchmark path. It is useful as a project-level setup guide.
-
-This new note is intended to be the more detailed client-facing technical explanation.
+- Cinematic mode relies on `EnableFlythrough()`,
+- Gameplay Replay mode relies on `EnableFirstPersonController()`.
 
 ---
 
-## What Was Added or Changed
+## How the Two Benchmark Modes Work
 
-### Major implemented changes
+### Cinematic mode
 
-1. **Fixed cinematic benchmark path**
-   A one-minute flythrough path with the required 10 seconds static plus 50 seconds of motion at different speeds.
+Flow:
 
-2. **Start screen UI**
-   Added an in-engine start screen that allows the user to select:
-   - refresh cap,
-   - VRS mode,
-   - and now also the run mode.
+1. User selects FPS and VRS.
+2. `StartScreenUI` applies the selected settings.
+3. `PlayerManager.EnableFlythrough()` starts the Timeline-based route.
+4. `FlythroughController` applies the one-minute speed schedule.
+5. Overlay and CSV logging run throughout the benchmark.
 
-3. **12-case cinematic matrix runner**
-   Added an automatic runner for the required refresh-rate/VRS combinations.
+This is the SOW-aligned fixed-animation path.
 
-4. **CSV logging every 100 ms**
-   Added regular benchmark logging for performance monitoring.
+### Gameplay Replay mode
 
-5. **Gameplay replay mode**
-   Added a client-requested mode that replays real gameplay input through the real controller.
+Flow:
 
-6. **Replay-aware CSV metadata**
-   Replay runs now include metadata such as replay file name and scenario in the CSV header.
-
-7. **Unused capture path removed from active design**
-   The earlier transform-based replay idea was superseded by the gameplay-input replay approach.
-
-### Relevant recent commits
-
-- `27d9af2` — add 12-case matrix runner and fix button highlight state after batch run
-- `e12bfa6` — switch recorder/replayer to real gameplay input for Oasis
-- `e158eea` — add Oasis gameplay replay benchmark mode and CSV metadata
-
----
-
-## How the Cinematic Mode Works
-
-The cinematic mode is based on the existing `PlayableDirector` and `PlayerManager.EnableFlythrough()` path.
-
-At a high level:
-
-1. The user selects the frame-rate cap and VRS mode.
-2. `StartScreenUI` applies the frame-rate cap and VRS.
-3. The code starts the Timeline flythrough through `PlayerManager.EnableFlythrough()`.
-4. `FlythroughController` immediately sets the Timeline speed to zero, then applies the one-minute schedule.
-5. The overlay displays live FPS and VRS state.
-6. CSV rows are emitted every 100 ms.
-
-The speed schedule is:
-
-- 10 s at 0.00x
-- 10 s at 0.50x
-- 8 s at 1.50x
-- 10 s at 0.60x
-- 7 s at 1.20x
-- 15 s at 0.24x
-
-This consumes 35 seconds of authored Timeline content across exactly 60 seconds of wall-clock time.
-
-This directly matches the original Phase 1 requirement for a fixed walk-through with varying motion speed.
-
----
-
-## How the Gameplay Replay Mode Works
-
-The gameplay replay mode is intended to answer a different question: not "what happens on a fixed cinematic route?" but "what happens during gameplay-like movement under the same rendering settings?"
-
-At a high level:
-
-1. A gameplay input recording is created in Oasis.
-2. The user selects Gameplay Replay mode on the start screen.
-3. `StartScreenUI` loads the input recording.
-4. The benchmark switches back into the first-person controller state.
+1. A gameplay recording is first created in Oasis.
+2. User selects Gameplay Replay mode.
+3. `StartScreenUI` shows the available replay files and loads the selected file.
+4. The benchmark switches into first-person controller mode.
 5. `InputReplayer` restores the recorded start pose.
-6. `InputReplayer` feeds recorded move/look/jump/sprint values into `StarterAssetsInputs`.
-7. `FirstPersonController` and `CharacterController` process those inputs normally.
-8. `FlythroughController` logs FPS/VRS data during the replay using the same CSV pipeline used for cinematic mode.
+6. `InputReplayer` feeds recorded move/look/jump/sprint values into the live controller stack.
+7. `FlythroughController` logs FPS/VRS data during the run.
 
-This means gameplay replay preserves:
+This keeps real controller behaviour, including collisions, gravity and input noise.
 
-- live collision behaviour,
-- gravity,
-- grounded state changes,
-- controller acceleration,
-- camera rotation,
-- and natural noise introduced by the real gameplay stack.
-
-This is useful when the goal is realism rather than perfectly repeatable camera motion.
-
----
-
-## Why Gameplay Replay Is Not the Same as the Original SOW Path
-
-This point is important and should be stated clearly.
-
-The SOW’s original fixed-animation requirement is about **comparing rendering settings under the same camera route**. Gameplay replay, by contrast, allows controller noise and frame-rate-sensitive route variation to remain part of the run.
-
-That means:
-
-- gameplay replay is **more realistic**, but
-- gameplay replay is **less controlled** than the fixed cinematic route.
-
-Therefore, gameplay replay should be viewed as an **additional analysis mode**, not as a replacement for the original fixed-animation benchmark.
+For on-device recording, gameplay uses the existing mobile touch controls from the first-person controller package, and recording can be stopped with an on-screen `STOP & SAVE` overlay button rather than relying on a hardware keyboard.
 
 ---
 
 ## How VRS Is Implemented
 
-### API path used
-
-VRS is applied using Tuanjie/Unity rendering APIs:
+The benchmark uses Unity/Tuanjie rendering APIs:
 
 - `GraphicsSettings.variableRateShadingMode`
 - `Renderer.shadingRate`
 
-### Supported VRS modes in the UI
-
-The user-facing options are:
+Supported UI options are:
 
 - `VRS Off`
 - `1x2`
 - `2x2`
 - `4x4`
 
-The SOW requires the hardware VRS modes:
+The SOW-required hardware VRS modes are:
 
 - `1x2`
 - `2x2`
 - `4x4`
 
-The project includes `VRS Off` as an additional baseline, which is useful for comparison.
+`VRS Off` is included as a useful baseline.
 
-### How the mapping works
-
-The code maps the UI mode to the engine fragment size:
-
-- `1x2` -> `ShadingRateFragmentSize.Size1x2`
-- `2x2` -> `ShadingRateFragmentSize.Size2x2`
-- `4x4` -> `ShadingRateFragmentSize.Size4x4`
-
-The benchmark then:
+At runtime the benchmark:
 
 1. checks `SystemInfo.shadingRateTypeCaps`,
 2. sets `GraphicsSettings.variableRateShadingMode`,
 3. iterates scene renderers,
 4. skips renderers under a `Canvas`,
-5. and applies `Renderer.shadingRate` to scene renderers only.
+5. applies `Renderer.shadingRate` to scene renderers.
 
-Skipping UI renderers is intentional because non-1x1 shading on UI can be meaningless or visually problematic.
+Skipping UI renderers is intentional. UI is not the right target for this benchmark, and applying non-1x1 shading to UI can create misleading visuals.
 
-### What the project currently checks
+### What this verifies
 
-The project checks the following at runtime:
+The code verifies:
 
-- whether the device reports VRS hardware capability via `SystemInfo.shadingRateTypeCaps`,
-- which `GraphicsSettings.variableRateShadingMode` is currently active,
-- and how many scene renderers were assigned a VRS rate.
+- engine-reported VRS capability,
+- engine-reported active VRS mode,
+- and the number of renderers given a VRS rate.
 
-This information is shown on-screen and written into the CSV headers/logging path.
+### What this does not fully prove
 
-### What the project does not yet prove conclusively
+The current Unity code does **not** prove hardware-level VRS execution at the GPU-driver level. Final confirmation would still benefit from Huawei-supported profiling tools such as DevEco Profiler or equivalent GPU-level validation.
 
-This project does **not** prove at a low-level GPU-driver or hardware-profiler level that the hardware used the exact requested shading pattern for every draw.
+So the correct statement is:
 
-To prove that conclusively, one would still want vendor-level profiling or Huawei-assisted verification, for example through:
-
-- Huawei DevEco Profiler,
-- or a GPU debugging/profiling tool available for the target hardware.
-
-In other words:
-
-- the project **does configure VRS through the engine APIs**, and
-- the project **does check the engine-reported capability and mode**, but
-- final hardware-level proof is still a profiling task, not something the current Unity code can guarantee alone.
+- the project **does configure VRS correctly through engine APIs**,
+- the project **does verify the engine-reported mode and capability**,
+- but **final hardware proof still requires profiling**.
 
 ---
 
-## CSV Logging and Measurement Behaviour
+## Logging, Storage and Device Workflow
 
-The benchmark logs rows every 100 ms.
+### What is logged
 
-Each row includes:
+The benchmark writes rows every 100 ms containing:
 
 - elapsed time,
 - measured FPS,
@@ -404,138 +313,136 @@ Each row includes:
 - current speed multiplier,
 - active VRS mode,
 - number of VRS-modified renderers,
-- and a simple throttling indicator.
+- a simple throttling flag.
 
-Replay runs add metadata such as:
+Replay runs also add CSV metadata such as:
 
-- replay mode,
-- scenario,
 - replay file name,
-- replay scene path,
-- replay duration.
+- replay scene,
+- replay duration,
+- run mode.
 
-This satisfies the Phase 1/Phase 2 expectation that the run should be observable in a structured way at 100 ms cadence, even though device power telemetry is not yet part of this Unity-side implementation.
+### Where files are saved
 
----
+The files are written to Unity’s `Application.persistentDataPath`.
 
-## Thermal Throttling Detection
+That means:
 
-The current code does **not** read a device thermal API directly.
+- when the app runs in the Unity Editor, the files are saved on the local development machine,
+- when the app runs on the Huawei device, the files are saved on the Huawei device.
 
-However, it does include a simple throttling indicator based on FPS collapse relative to the selected target frame rate.
+The current files of interest are:
 
-This is useful as an early warning signal but should not be treated as a complete thermal diagnosis.
+- benchmark CSV files,
+- `gameplay_input_*.bin` replay files.
 
-Proper thermal-throttling verification for Phase 2 would ideally include:
+### Does the device need to stay connected?
 
-- device temperature or thermal-state APIs,
-- power measurement,
-- and ideally controlled cooling during repeated runs.
+No. The device does **not** need to remain connected to the computer just to run the benchmark after installation.
 
-This is consistent with the SOW note that active cooling may be required and that Huawei assistance may be needed.
+The device connection is mainly needed for:
 
----
+- build and deployment,
+- pulling files back from the device,
+- debugging,
+- profiling.
 
-## What Has Been Verified
+### How files are retrieved
 
-Based on the current codebase and implementation review, the following have been verified at code level:
-
-- the Oasis benchmark supports frame-rate caps of 120, 60, 40 and 30 fps,
-- the Oasis benchmark supports VRS Off, 1x2, 2x2 and 4x4,
-- the cinematic mode still exists and remains the default mode,
-- the cinematic matrix runner still exists and is restricted to the fixed-animation mode,
-- the gameplay replay mode now routes through the real first-person controller path,
-- the shared overlay/CSV logger supports both run types,
-- replay CSV files now include replay-specific metadata,
-- and the updated scripts compile cleanly.
+The expected workflow is to pull them back from the device with `hdc file recv` after the run.
 
 ---
 
-## What Has Not Been Fully Verified Yet
+## Verification Status
 
-The following items remain open or partially verified:
+At code level, the following have been verified:
 
-1. **Hardware-level confirmation of VRS effectiveness**
-   The engine configuration path is in place, but hardware-profiler confirmation is still recommended.
+- Oasis benchmark supports frame-rate caps of 120, 60, 40 and 30 fps,
+- Oasis benchmark supports VRS Off, 1x2, 2x2 and 4x4,
+- Cinematic mode still exists and remains the default mode,
+- the cinematic matrix runner remains in place,
+- Gameplay Replay mode routes through the real first-person controller path,
+- both modes use the same overlay and CSV logger,
+- replay CSVs include replay-specific metadata,
+- the current updated scripts compile cleanly.
 
-2. **Phase 2 power-draw collection**
-   Not yet implemented in this Unity code. This likely requires Huawei assistance or additional tooling.
+Also, a practical UI edge case was fixed during review: single Cinematic and Gameplay Replay runs now return cleanly to the menu after completion.
+
+---
+
+## What Is Not Yet Fully Verified or Implemented
+
+The following items remain open:
+
+1. **Hardware-level VRS confirmation**
+   Engine-level setup is in place, but hardware-level confirmation still needs profiling.
+
+2. **Phase 2 power telemetry**
+   Device power draw is not yet collected by this Unity code.
 
 3. **Optional GPU/CPU utilisation collection**
    Not yet implemented in this Unity code.
 
-4. **Command-line Harmony build stability in the current local environment**
-   The intended build path is through DevEco Studio. A previously investigated command-line `hvigor` path was blocked by a local SDK registration issue. That is a tooling/environment issue rather than a benchmark-design issue.
+4. **Harmony/OpenHarmony command-line build robustness in the local environment**
+   The recommended build route remains DevEco Studio. A previous local `hvigor` issue was an SDK/tooling registration problem rather than a benchmark logic problem.
 
-5. **Desktop screen recording automation**
-   The SOW mentions desktop recordings. The project no longer relies on the earlier unused `CameraRecorder.cs` path. Desktop capture would need to be handled either by Unity Recorder, an OS recording tool, or a separate clean capture workflow.
+5. **Desktop recording workflow**
+   Still needs a clear final method, for example Unity Recorder, OS-level capture, or another approved desktop path.
 
-6. **Multiple replay-file selection in the UI**
-   The current gameplay replay path loads the default replay file unless configured otherwise. This is sufficient for initial use but can be extended.
+6. **Replay-file management niceties**
+   Replay-file selection is now available in the UI. Optional future improvements would be rename/delete or richer replay metadata in the picker.
 
 ---
 
 ## Risks and Limitations
 
-### 1. Gameplay replay is intentionally noisy
+### Gameplay Replay is intentionally noisy
 
-This is a feature, not a bug, but it changes how results should be interpreted.
+This is by design.
 
-Because gameplay replay keeps real controller behaviour active, two runs at different frame rates may not traverse the scene in exactly the same way. That means gameplay replay should be analysed statistically rather than treated as a perfectly repeatable path.
+Because replay runs through the live controller, different frame rates can lead to slightly different route outcomes. That is what makes this mode more realistic, but also less controlled.
 
 Recommended interpretation:
 
-- use **Cinematic mode** for controlled, low-noise comparison,
+- use **Cinematic mode** for strict comparison,
 - use **Gameplay Replay mode** for realism,
-- and do not confuse the two.
+- treat Gameplay Replay as a distribution-based measurement rather than a perfectly repeatable path.
 
-### 2. Replay files are scene-specific
+### Replay files are scene-specific
 
-A replay recorded in Oasis should be treated as an Oasis replay. Reusing a replay in another scene may not make sense and is not the current intended workflow.
+An Oasis replay should be treated as an Oasis replay.
 
-### 3. PlayerManager assumptions depend on the Oasis setup
+### Gameplay Replay currently depends on the Oasis controller setup
 
-Gameplay Replay mode relies on the Oasis first-person controller and `PlayerManager` structure. This is appropriate for the current demo project, but it is not a general benchmark framework for arbitrary Unity scenes yet.
+This is appropriate for the approved demo project, but it is not yet a generic benchmark system for arbitrary Unity scenes.
 
-### 4. Harmony/OpenHarmony build tooling remains environment-sensitive
+### Final deployment still depends on the Huawei/DevEco environment
 
-The Unity-side project is structured for Harmony/OpenHarmony export, but final deployment still depends on a correctly installed SDK and DevEco environment.
+The Unity-side benchmark logic is in place, but final build/deploy steps still depend on a correct Harmony/OpenHarmony SDK and DevEco configuration.
 
 ---
 
-## Why This Is the Right Current Approach
+## Recommended Use
 
-From a first-principles point of view, the current implementation is a good fit because it separates two distinct benchmarking goals instead of forcing one method to do both jobs badly.
-
-### If the goal is strict rendering comparison
-
-Use **Cinematic mode**.
-
-Why:
+### Use Cinematic mode when the goal is:
 
 - same route,
 - same timing model,
 - same scene visibility pattern,
 - lower measurement noise,
-- directly aligned to the original SOW wording.
+- direct traceability to the original SOW.
 
-### If the goal is realistic gameplay behaviour
+### Use Gameplay Replay mode when the goal is:
 
-Use **Gameplay Replay mode**.
+- realistic gameplay motion,
+- live controller behaviour,
+- collision and gravity effects,
+- more representative player-facing behaviour.
 
-Why:
+The strongest overall approach is to keep both:
 
-- real controller path,
-- real gameplay motion,
-- real collisions and gravity,
-- real camera behaviour,
-- more representative of player experience.
-
-### Why keeping both is the strongest answer
-
-Because the client’s later request introduced a different measurement objective, the best answer is not to delete the original method. The best answer is to preserve the original SOW-compliant route and add the more realistic route alongside it.
-
-That is what has now been implemented.
+- **Cinematic mode** as the SOW-compliant baseline,
+- **Gameplay Replay mode** as the realism-oriented extension.
 
 ---
 
@@ -543,30 +450,34 @@ That is what has now been implemented.
 
 ### Short-term
 
-1. Record one or more Oasis gameplay replay files representative of the scenarios the client cares about.
+1. Record one or more Oasis gameplay replay files representing the client’s chosen gameplay scenarios.
 2. Run the cinematic matrix for baseline comparison.
-3. Run repeated gameplay replay tests per VRS setting and compare distributions rather than only single runs.
+3. Run repeated gameplay replay tests per VRS setting and compare distributions rather than single runs.
 
 ### Medium-term
 
-1. Integrate power-draw collection for Phase 2.
-2. Add GPU/CPU utilisation if Huawei APIs or tools permit it.
-3. Add replay-file selection in the UI.
-4. Define a clean desktop capture workflow for screen recordings.
+1. Integrate Phase 2 power collection.
+2. Add GPU/CPU utilisation if Huawei tooling allows it.
+3. Define the desktop recording workflow.
+4. Optionally improve replay-file management in the UI.
 
 ### Validation
 
 1. Confirm VRS behaviour on-device with Huawei-supported profiling tools.
-2. Validate that the chosen gameplay replay scenarios are representative.
-3. Validate that thermal control during testing is adequate.
+2. Validate that the replay scenarios are representative of real use.
+3. Validate thermal control during repeated test runs.
 
 ---
 
 ## Final Position
 
-The implementation is now in a good state for Phase 1 benchmarking because it supports both:
+The implementation is in a good state for Phase 1 because it now supports both:
 
 - the original fixed one-minute camera route required by the SOW, and
 - the later-requested gameplay-like replay mode.
 
-The rendering configuration controls, VRS controls, overlay, and CSV logging are all present. The main remaining gaps are Phase 2 telemetry and environment-level deployment/tooling verification rather than missing benchmark logic inside Unity.
+The key remaining gaps are not missing Unity-side benchmark logic. They are mainly:
+
+- Phase 2 telemetry,
+- hardware-level VRS confirmation,
+- and environment/tooling validation for deployment and profiling.
