@@ -1123,7 +1123,7 @@ public class StartScreenUI : MonoBehaviour
         if (oldCube != null) Destroy(oldCube);
 
         var cube = GameObject.CreatePrimitive(PrimitiveType.Cube);
-        cube.name = "VRS_Proof_Cube";
+        cube.name = "VRS_Proof_Cube_GREEN";
         
         // Remove collider so it doesn't interfere with physics or movement
         var col = cube.GetComponent<Collider>();
@@ -1155,7 +1155,7 @@ public class StartScreenUI : MonoBehaviour
                 r.material = new Material(urpLit);
             }
             
-            r.material.color = Color.red;
+            r.material.color = Color.green;
         }
         
         Debug.Log("[VRS] Spawned Proof Cube attached to Camera to verify shading artifacts visually.");
