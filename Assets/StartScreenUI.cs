@@ -1219,11 +1219,13 @@ public class StartScreenUI : MonoBehaviour
             return 0;
         }
 
-        // We continue even if caps == None so that the UI can still show 'found X renderers'
-        // as proof that the scene scanning logic is working for the client.
+        // We continue even if caps == None. 
+        // FIRST PRINCIPLES: If the detection logic is buggy on this new GPU, 
+        // we should 'Brute Force' the command anyway. If the hardware can do it, 
+        // it will do it, even if Unity's detection says 'None'.
         if (caps == ShadingRateTypeCaps.None)
         {
-            Debug.LogWarning("[VRS] Hardware does not support VRS on this device — shading rate commands will be ignored by the GPU, but the script will still track scene renderers for verification.");
+            Debug.LogWarning("[VRS_BRUTE_FORCE] Hardware detection returned 'None', but we are pushing the shading rate commands to the GPU anyway.");
         }
 
         ShadingRateFragmentSize fragmentSize = mode switch
