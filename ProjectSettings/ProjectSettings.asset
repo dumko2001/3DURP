@@ -1313,7 +1313,7 @@ PlayerSettings:
   OpenHarmonyKeyaliasName: 
   OpenHarmonyProfile: 
   OpenHarmonyCertificate: 
-  OpenHarmonyCompatibleSdkVersion: 12
+  OpenHarmonyCompatibleSdkVersion: 11
   OpenHarmonyUseCustomKeystore: 0
   OpenHarmonyUseCustomModuleJsonFive: 0
   OpenHarmonyUseCustomTuanjiePlayerAbility: 0
