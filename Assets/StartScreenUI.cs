@@ -1136,8 +1136,9 @@ public class StartScreenUI : MonoBehaviour
         return value.Replace(' ', '_');
     }
 
-    // Returns the number of scene renderers that received the VRS rate.
-    // 0 = VRS Off or no renderers modified.
+    private Coroutine _vrsCoroutine;
+
+    // Returns the number of scene renderers that received the VRS rate immediately.
     int ApplyVRS(int mode)
     {
         // Always log hardware caps so it appears in adb logcat during testing.
@@ -1146,36 +1147,60 @@ public class StartScreenUI : MonoBehaviour
 
         if (mode == 0)
         {
-            // VRS Off — restore full 1×1 shading rate on all renderers.
             GraphicsSettings.variableRateShadingMode = VariableRateShadingMode.Off;
-            foreach (var r in FindObjectsOfType<Renderer>(true))
-                if (IsSceneRenderer(r))
-                    r.shadingRate = ShadingRateFragmentSize.Size1x1;
+            int count = ApplyVRSInternal(ShadingRateFragmentSize.Size1x1);
+            if (_vrsCoroutine != null) StopCoroutine(_vrsCoroutine);
             Debug.Log("[VRS] Disabled — full 1×1 quality restored.");
             return 0;
         }
 
-        // Require at least Pipeline or Primitive hardware support.
         if (caps == ShadingRateTypeCaps.None)
         {
             Debug.LogWarning("[VRS] Hardware does not support VRS on this device — skipped.");
             return 0;
         }
 
-        // Map button index to fragment size.
         ShadingRateFragmentSize fragmentSize = mode switch
         {
-            1 => ShadingRateFragmentSize.Size1x2,  // 1×2 — halve vertical resolution
-            2 => ShadingRateFragmentSize.Size2x2,  // 2×2 — quarter shading resolution
-            3 => ShadingRateFragmentSize.Size4x4,  // 4×4 — sixteenth shading resolution
+            1 => ShadingRateFragmentSize.Size1x2,
+            2 => ShadingRateFragmentSize.Size2x2,
+            3 => ShadingRateFragmentSize.Size4x4,
             _ => ShadingRateFragmentSize.Size1x1,
         };
 
-        // Custom mode: per-renderer shadingRate values are read by URP.
         GraphicsSettings.variableRateShadingMode = VariableRateShadingMode.Custom;
 
-        // Apply to 3D scene renderers only — skip UI, particle systems on
-        // CanvasRenderer-bearing GameObjects, and any renderer on a Canvas layer.
+        // Apply immediately for anything already loaded
+        int initialCount = ApplyVRSInternal(fragmentSize);
+        Debug.Log($"[VRS] {vrsLabels[mode]} ({fragmentSize}) → {initialCount} scene renderers initially. Caps={caps}");
+
+        // Start routine to catch late-spawning or additively loaded objects
+        if (_vrsCoroutine != null) StopCoroutine(_vrsCoroutine);
+        _vrsCoroutine = StartCoroutine(ContinuousVRSApplyRoutine(fragmentSize));
+
+        return initialCount;
+    }
+
+    System.Collections.IEnumerator ContinuousVRSApplyRoutine(ShadingRateFragmentSize fragmentSize)
+    {
+        // Poll every 1 second for the first 15 seconds of the benchmark to catch delayed spawns
+        for (int i = 0; i < 15; i++)
+        {
+            yield return new WaitForSeconds(1.0f);
+            int newCount = ApplyVRSInternal(fragmentSize);
+            
+            // If a massive chunk of renderers just loaded, update the UI tracker variable
+            if (newCount > vrsRendererCount)
+            {
+                vrsRendererCount = newCount;
+                Debug.Log($"[VRS] Late Spawns Caught! Updated active VRS renderers to: {vrsRendererCount}");
+            }
+        }
+    }
+
+    // Extracted logic to apply the rate and count valid renderers
+    int ApplyVRSInternal(ShadingRateFragmentSize fragmentSize)
+    {
         int count = 0;
         foreach (var r in FindObjectsOfType<Renderer>(true))
         {
@@ -1183,8 +1208,6 @@ public class StartScreenUI : MonoBehaviour
             r.shadingRate = fragmentSize;
             count++;
         }
-
-        Debug.Log($"[VRS] {vrsLabels[mode]} ({fragmentSize}) → {count} scene renderers. Caps={caps}");
         return count;
     }
 
