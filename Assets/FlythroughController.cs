@@ -224,6 +224,13 @@ public class FlythroughController : MonoBehaviour
         string modeStr = (mode == VariableRateShadingMode.Off)
                          ? "Off"
                          : $"{mode} ({_vrsRendererCount} renderers)";
+
+        // If hardware doesn't support it, label it as Ignored so it isn't misleading on Mac/Editor.
+        if (caps == ShadingRateTypeCaps.None && mode != VariableRateShadingMode.Off)
+        {
+            modeStr = $"Ignored — {modeStr}";
+        }
+
         _line2.text = $"VRS hw: {capStr}  |  active: {modeStr}";
     }
 
