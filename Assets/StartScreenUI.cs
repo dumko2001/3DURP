@@ -1155,7 +1155,7 @@ public class StartScreenUI : MonoBehaviour
                 r.material = new Material(urpLit);
             }
             
-            r.material.color = Color.green;
+            r.material.color = Color.red;
         }
         
         Debug.Log("[VRS] Spawned Proof Cube attached to Camera to verify shading artifacts visually.");
