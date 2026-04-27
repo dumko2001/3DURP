@@ -67,7 +67,7 @@ GraphicsSettings:
   m_GenerateGeometryBuffer: 0
   m_EnableGDRP: 0
   m_EnableTuanjieGI: 0
-  m_VariableRateShadingMode: 1
+  m_VariableRateShadingMode: 2
   m_RelativeRateShadingLevel: 1
   m_MaxDistanceRatio: 500
   m_MinDistanceRatio: 1
