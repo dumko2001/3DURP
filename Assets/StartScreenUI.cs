@@ -1194,11 +1194,18 @@ public class StartScreenUI : MonoBehaviour
         string api = SystemInfo.graphicsDeviceVersion;
         string gpu = SystemInfo.graphicsDeviceName;
         var caps = SystemInfo.shadingRateTypeCaps;
+        var apiType = SystemInfo.graphicsDeviceType;
         
         Debug.Log($"[VRS_DIAGNOSTIC] Device: {gpu}");
-        Debug.Log($"[VRS_DIAGNOSTIC] API: {api}");
+        Debug.Log($"[VRS_DIAGNOSTIC] API (Full): {api}");
+        Debug.Log($"[VRS_DIAGNOSTIC] API (Type): {apiType}");
         Debug.Log($"[VRS_DIAGNOSTIC] Caps: {caps}");
-        Debug.Log($"[VRS_DIAGNOSTIC] Master Mode: {GraphicsSettings.variableRateShadingMode}");
+
+        // First-Principles Check: VRS only works on Vulkan for this platform.
+        if (apiType == UnityEngine.Rendering.GraphicsDeviceType.OpenGLES3)
+        {
+            Debug.LogError("[VRS_FATAL] Engine fallback to OpenGL ES 3 detected. VRS is hardware-disabled in this mode. You must use Vulkan.");
+        }
 
         // Always log hardware caps so it appears in adb logcat during testing.
         Debug.Log($"[VRS] Hardware caps check: {caps}");
