@@ -1190,9 +1190,18 @@ public class StartScreenUI : MonoBehaviour
     // Returns the number of scene renderers that received the VRS rate immediately.
     int ApplyVRS(int mode)
     {
+        // DEEP DIAGNOSTIC: Log the raw truth about the GPU driver state
+        string api = SystemInfo.graphicsDeviceVersion;
+        string gpu = SystemInfo.graphicsDeviceName;
+        var caps = SystemInfo.shadingRateTypeCaps;
+        
+        Debug.Log($"[VRS_DIAGNOSTIC] Device: {gpu}");
+        Debug.Log($"[VRS_DIAGNOSTIC] API: {api}");
+        Debug.Log($"[VRS_DIAGNOSTIC] Caps: {caps}");
+        Debug.Log($"[VRS_DIAGNOSTIC] Master Mode: {GraphicsSettings.variableRateShadingMode}");
+
         // Always log hardware caps so it appears in adb logcat during testing.
-        ShadingRateTypeCaps caps = SystemInfo.shadingRateTypeCaps;
-        Debug.Log($"[VRS] Hardware caps: {caps}");
+        Debug.Log($"[VRS] Hardware caps check: {caps}");
 
         if (mode == 0)
         {
