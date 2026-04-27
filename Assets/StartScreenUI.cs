@@ -1201,14 +1201,10 @@ public class StartScreenUI : MonoBehaviour
         Debug.Log($"[VRS_DIAGNOSTIC] API (Type): {apiType}");
         Debug.Log($"[VRS_DIAGNOSTIC] Caps: {caps}");
 
-        // HUAWEI XENGINE CHECK: The 'Secret Handshake'
-        // We log if the driver string contains 'XEG', which confirms the Huawei XEngine is active.
-        bool hasXEngine = api.Contains("XEG") || gpu.Contains("Maleoon");
-        Debug.Log($"[VRS_XENGINE] Huawei XEngine Detectable: {hasXEngine}");
-        
-        if (hasXEngine && caps == ShadingRateTypeCaps.None)
+        // First-Principles Check: VRS only works on Vulkan for this platform.
+        if (apiType == UnityEngine.Rendering.GraphicsDeviceType.OpenGLES3)
         {
-            Debug.LogWarning("[VRS_XENGINE] Maleoon GPU detected but VRS is locked. This usually means 'Huawei Graphics Extension' is not checked in Player Settings.");
+            Debug.LogError("[VRS_FATAL] Engine fallback to OpenGL ES 3 detected. VRS is hardware-disabled in this mode. You must use Vulkan.");
         }
 
         // Always log hardware caps so it appears in adb logcat during testing.
