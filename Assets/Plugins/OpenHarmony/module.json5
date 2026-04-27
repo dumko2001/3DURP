@@ -59,6 +59,10 @@
           {
             "name": "ohos.ability.window.height",
             "value": "720",
+          },
+          {
+            "name": "ohos.ability.window.category",
+            "value": "game"
           }
         ],
       }
