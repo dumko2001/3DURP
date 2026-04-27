@@ -1,5 +1,6 @@
 {
   "dependencies": {
+    "cn.tuanjie.openharmony.hilog": "1.1.2",
     "cn.tuanjie.openharmony.sdkkit": "1.2.0",
     "com.unity.cinemachine": "2.10.3",
     "com.unity.collab-proxy": "2.12.4",
