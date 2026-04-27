@@ -235,7 +235,7 @@ public class FlythroughController : MonoBehaviour
         _line2.text = $"VRS hw: {capStr}  |  active: {modeStr}";
 
         // Line 3: Deep Hardware Identity (DNA)
-        _line3.text = $"GPU: {SystemInfo.graphicsDeviceName}  |  API: {SystemInfo.graphicsDeviceVersion}";
+        _line3.text = $"GPU: {SystemInfo.graphicsDeviceName}  |  API: {SystemInfo.graphicsDeviceVersion}  |  Caps: {SystemInfo.shadingRateTypeCaps}";
     }
 
     // ── Speed schedule coroutine ─────────────────────────────────────────────
