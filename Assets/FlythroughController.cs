@@ -76,6 +76,7 @@ public class FlythroughController : MonoBehaviour
     // UI — two lines
     private Text  _line1;   // measured fps | elapsed time | config
     private Text  _line2;   // VRS hardware caps + active mode (read live from engine)
+    private Text  _line3;   // Deep Diagnostic: GPU Name | API Version
     private GameObject _overlayCanvas;
     private Action _runCompleteCallback;
     private string _csvFileName = "benchmark_results.csv";
@@ -232,6 +233,9 @@ public class FlythroughController : MonoBehaviour
         }
 
         _line2.text = $"VRS hw: {capStr}  |  active: {modeStr}";
+
+        // Line 3: Deep Hardware Identity (DNA)
+        _line3.text = $"GPU: {SystemInfo.graphicsDeviceName}  |  API: {SystemInfo.graphicsDeviceVersion}";
     }
 
     // ── Speed schedule coroutine ─────────────────────────────────────────────
@@ -362,19 +366,20 @@ public class FlythroughController : MonoBehaviour
         bgRT.anchorMax        = new Vector2(0f, 1f);
         bgRT.pivot            = new Vector2(0f, 1f);
         bgRT.anchoredPosition = new Vector2(12f, -12f);
-        bgRT.sizeDelta        = new Vector2(820f, 72f);
+        bgRT.sizeDelta        = new Vector2(820f, 108f);
 
         // Line 1 (top row) — white: measured fps, elapsed time, config.
-        // offsetMin.y=36 → bottom of row is at the middle of the BG (36px from bottom)
-        // offsetMax.y=0  → top of row touches BG top
-        _line1 = MakeTextRow(bgGO.transform, new Vector2(10f, 36f), new Vector2(-10f, 0f), Color.white);
+        _line1 = MakeTextRow(bgGO.transform, new Vector2(10f, 72f), new Vector2(-10f, 0f), Color.white);
 
-        // Line 2 (bottom row) — amber: live VRS hardware state from engine.
-        // offsetMin.y=4  → 4px padding above BG bottom
-        // offsetMax.y=-36 → top of row is at the BG midpoint (36px below BG top)
-        _line2 = MakeTextRow(bgGO.transform, new Vector2(10f, 4f), new Vector2(-10f, -36f),
+        // Line 2 (middle row) — amber: live VRS hardware state from engine.
+        _line2 = MakeTextRow(bgGO.transform, new Vector2(10f, 36f), new Vector2(-10f, -36f),
                              new Color(1f, 0.85f, 0.35f, 1f));
         _line2.fontSize = OVERLAY_FONT_SIZE - 2;
+
+        // Line 3 (bottom row) — cyan: deep GPU diagnostic (Driver DNA).
+        _line3 = MakeTextRow(bgGO.transform, new Vector2(10f, 0f), new Vector2(-10f, -72f),
+                             new Color(0.4f, 1f, 1f, 1f));
+        _line3.fontSize = OVERLAY_FONT_SIZE - 4;
     }
 
     private Text MakeTextRow(Transform parent, Vector2 offsetMin, Vector2 offsetMax, Color color)
