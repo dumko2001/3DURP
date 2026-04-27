@@ -599,6 +599,9 @@ public class StartScreenUI : MonoBehaviour
         QualitySettings.vSyncCount  = 0;
         Application.targetFrameRate = fps;
 
+        // Spawn a red 'Proof Cube' to provide visual confirmation of VRS artifacts
+        SpawnVRSProofCube();
+
         // Apply VRS — captures renderer count for the overlay
         vrsRendererCount = ApplyVRS(vrsMode);
 
@@ -673,6 +676,7 @@ public class StartScreenUI : MonoBehaviour
     {
         QualitySettings.vSyncCount  = 0;
         Application.targetFrameRate = fps;
+        SpawnVRSProofCube();
         vrsRendererCount = ApplyVRS(vrsMode);
 
         string replayPath = GetSelectedReplayPath();
@@ -1110,6 +1114,29 @@ public class StartScreenUI : MonoBehaviour
     static void SetField(FieldInfo field, object target, object value)
     {
         field?.SetValue(target, value);
+    }
+
+    private void SpawnVRSProofCube()
+    {
+        // Clean up old proof cubes if any
+        var oldCube = GameObject.Find("VRS_Proof_Cube");
+        if (oldCube != null) Destroy(oldCube);
+
+        var cube = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        cube.name = "VRS_Proof_Cube";
+        
+        // Position it in a clearly visible spot near the world origin
+        cube.transform.position = new Vector3(0f, 2.5f, 5f); 
+        cube.transform.localScale = Vector3.one * 1.5f;
+
+        var r = cube.GetComponent<Renderer>();
+        if (r != null)
+        {
+            // Give it a bright recognizable color
+            r.material.color = Color.red;
+        }
+        
+        Debug.Log("[VRS] Spawned Proof Cube at (0, 2.5, 5) to verify shading artifacts visually.");
     }
 
     static string BuildReplayPickerLabel(int index, int total, string fileName)
