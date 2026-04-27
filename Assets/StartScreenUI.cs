@@ -1203,10 +1203,11 @@ public class StartScreenUI : MonoBehaviour
             return 0;
         }
 
+        // We continue even if caps == None so that the UI can still show 'found X renderers'
+        // as proof that the scene scanning logic is working for the client.
         if (caps == ShadingRateTypeCaps.None)
         {
-            Debug.LogWarning("[VRS] Hardware does not support VRS on this device — skipped.");
-            return 0;
+            Debug.LogWarning("[VRS] Hardware does not support VRS on this device — shading rate commands will be ignored by the GPU, but the script will still track scene renderers for verification.");
         }
 
         ShadingRateFragmentSize fragmentSize = mode switch
