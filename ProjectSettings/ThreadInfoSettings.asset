@@ -3,7 +3,7 @@
 --- !u!9625 &1
 ThreadInfoSettings:
   m_ObjectHideFlags: 0
-  m_TargetPlatform: 0
+  m_TargetPlatform: 37
   m_HMIAndroidPlatformThreadInfoSettings:
     m_BasePlatformThreadInfoSettings:
       m_MainThreadPriority: -2
