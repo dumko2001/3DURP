@@ -27,7 +27,7 @@ MonoBehaviour:
   m_SupportsTerrainHoles: 0
   m_SupportsHDR: 1
   m_HDRColorBufferPrecision: 0
-  m_MSAA: 1
+  m_MSAA: 0
   m_MSAAHighQuality: 0
   m_RenderScale: 0.6
   DLSSPerfQualitySetting: 0
@@ -72,7 +72,7 @@ MonoBehaviour:
   m_SoftShadowQuality: 2
   m_AdditionalLightsCookieResolution: 1024
   m_AdditionalLightsCookieFormat: 1
-  m_UseSRPBatcher: 1
+  m_UseSRPBatcher: 0
   m_SupportsDynamicBatching: 0
   m_MixedLightingSupported: 1
   m_SupportsLightCookies: 1
