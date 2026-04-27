@@ -1148,6 +1148,13 @@ public class StartScreenUI : MonoBehaviour
         var r = cube.GetComponent<Renderer>();
         if (r != null)
         {
+            // Use the URP/Lit shader instead of the built-in 'Standard' shader which fails in URP/Vulkan
+            var urpLit = Shader.Find("Universal Render Pipeline/Lit");
+            if (urpLit != null)
+            {
+                r.material = new Material(urpLit);
+            }
+            
             r.material.color = Color.red;
         }
         
