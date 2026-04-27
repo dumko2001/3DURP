@@ -1136,8 +1136,9 @@ public class StartScreenUI : MonoBehaviour
         return value.Replace(' ', '_');
     }
 
-    // Returns the number of scene renderers that received the VRS rate.
-    // 0 = VRS Off or no renderers modified.
+    private Texture2D _vrsMapTexture;
+
+    // Returns a dummy count of 1 to indicate Image-Based VRS is active, 0 for off.
     int ApplyVRS(int mode)
     {
         // Always log hardware caps so it appears in adb logcat during testing.
@@ -1146,16 +1147,13 @@ public class StartScreenUI : MonoBehaviour
 
         if (mode == 0)
         {
-            // VRS Off — restore full 1×1 shading rate on all renderers.
+            // VRS Off
             GraphicsSettings.variableRateShadingMode = VariableRateShadingMode.Off;
-            foreach (var r in FindObjectsOfType<Renderer>(true))
-                if (IsSceneRenderer(r))
-                    r.shadingRate = ShadingRateFragmentSize.Size1x1;
             Debug.Log("[VRS] Disabled — full 1×1 quality restored.");
             return 0;
         }
 
-        // Require at least Pipeline or Primitive hardware support.
+        // Require hardware support.
         if (caps == ShadingRateTypeCaps.None)
         {
             Debug.LogWarning("[VRS] Hardware does not support VRS on this device — skipped.");
@@ -1171,21 +1169,33 @@ public class StartScreenUI : MonoBehaviour
             _ => ShadingRateFragmentSize.Size1x1,
         };
 
-        // Custom mode: per-renderer shadingRate values are read by URP.
-        GraphicsSettings.variableRateShadingMode = VariableRateShadingMode.Custom;
+        // Switch to Image-Based (Screen-Space) Mode
+        GraphicsSettings.variableRateShadingMode = VariableRateShadingMode.Image;
 
-        // Apply to 3D scene renderers only — skip UI, particle systems on
-        // CanvasRenderer-bearing GameObjects, and any renderer on a Canvas layer.
-        int count = 0;
-        foreach (var r in FindObjectsOfType<Renderer>(true))
+        // Create or update the global VRS Map (Tile-Map)
+        // Edge Case Fix: Vulkan strictly requires R8_UInt format for VRS images.
+        // Using a 1x1 clamped texture efficiently forces a global rate across the entire screen.
+        if (_vrsMapTexture == null)
         {
-            if (!IsSceneRenderer(r)) continue;
-            r.shadingRate = fragmentSize;
-            count++;
+            _vrsMapTexture = new Texture2D(1, 1, UnityEngine.Experimental.Rendering.GraphicsFormat.R8_UInt, UnityEngine.Experimental.Rendering.TextureCreationFlags.None);
+            _vrsMapTexture.filterMode = FilterMode.Point;
+            _vrsMapTexture.wrapMode = TextureWrapMode.Clamp;
         }
 
-        Debug.Log($"[VRS] {vrsLabels[mode]} ({fragmentSize}) → {count} scene renderers. Caps={caps}");
-        return count;
+        // Fill the map with the requested shading rate byte value
+        byte rateValue = (byte)fragmentSize;
+        var pixelData = _vrsMapTexture.GetRawTextureData<byte>();
+        pixelData[0] = rateValue;
+        _vrsMapTexture.Apply();
+
+        // Assign the map to the global graphics settings
+        GraphicsSettings.variableRateShadingImage = _vrsMapTexture;
+
+        Debug.Log($"[VRS] Image-Based Mode applied: {fragmentSize}");
+        
+        // Return the fragment size as an indicator (e.g., 4 for 4x4) so the CSV/UI reflects the intensity,
+        // since "renderer count" is no longer applicable.
+        return (int)fragmentSize;
     }
 
     // Returns true for renderers that should receive a VRS rate.
