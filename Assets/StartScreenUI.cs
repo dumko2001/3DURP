@@ -1125,18 +1125,33 @@ public class StartScreenUI : MonoBehaviour
         var cube = GameObject.CreatePrimitive(PrimitiveType.Cube);
         cube.name = "VRS_Proof_Cube";
         
-        // Position it in a clearly visible spot near the world origin
-        cube.transform.position = new Vector3(0f, 2.5f, 5f); 
-        cube.transform.localScale = Vector3.one * 1.5f;
+        // Remove collider so it doesn't interfere with physics or movement
+        var col = cube.GetComponent<Collider>();
+        if (col != null) Destroy(col);
+
+        // Attach to Main Camera so it's always in view during flythrough/gameplay
+        var cam = Camera.main;
+        if (cam != null)
+        {
+            cube.transform.SetParent(cam.transform, false);
+            cube.transform.localPosition = new Vector3(0.8f, 0.5f, 2.5f); // Offset to the top-right corner
+            cube.transform.localRotation = Quaternion.identity;
+            cube.transform.localScale = Vector3.one * 0.3f; // Smaller 'HUD' style cube
+        }
+        else
+        {
+            // Fallback to world origin if no camera found
+            cube.transform.position = new Vector3(0f, 2.5f, 5f); 
+            cube.transform.localScale = Vector3.one * 1.5f;
+        }
 
         var r = cube.GetComponent<Renderer>();
         if (r != null)
         {
-            // Give it a bright recognizable color
             r.material.color = Color.red;
         }
         
-        Debug.Log("[VRS] Spawned Proof Cube at (0, 2.5, 5) to verify shading artifacts visually.");
+        Debug.Log("[VRS] Spawned Proof Cube attached to Camera to verify shading artifacts visually.");
     }
 
     static string BuildReplayPickerLabel(int index, int total, string fileName)
