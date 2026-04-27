@@ -1183,13 +1183,16 @@ public class StartScreenUI : MonoBehaviour
 
     System.Collections.IEnumerator ContinuousVRSApplyRoutine(ShadingRateFragmentSize fragmentSize)
     {
-        // Poll every 1 second for the first 15 seconds of the benchmark to catch delayed spawns
-        for (int i = 0; i < 15; i++)
+        // Cache the wait to generate ZERO garbage collection spikes during the benchmark
+        var wait = new WaitForSeconds(2.0f);
+
+        // Poll continuously every 2 seconds to catch anything loaded dynamically during Gameplay or Replays
+        while (true)
         {
-            yield return new WaitForSeconds(1.0f);
+            yield return wait;
             int newCount = ApplyVRSInternal(fragmentSize);
             
-            // If a massive chunk of renderers just loaded, update the UI tracker variable
+            // If new renderers were spawned/loaded, update the UI tracker variable
             if (newCount > vrsRendererCount)
             {
                 vrsRendererCount = newCount;
